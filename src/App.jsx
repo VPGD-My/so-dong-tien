@@ -2,7 +2,7 @@ import React, { useState, useMemo } from "react";
 import {
   Plus, Wallet, CreditCard, Banknote, TrendingDown, TrendingUp, Trash2,
   ArrowRight, ArrowRightLeft, ArrowDownCircle, Landmark, PiggyBank, Repeat,
-  Settings, Users, BarChart3, PieChart as PieChartIcon, X,
+  Settings, Users, BarChart3, PieChart as PieChartIcon, X,Pencil,
 } from "lucide-react";
 import { PieChart, Pie, Cell, Tooltip, Legend, ResponsiveContainer } from "recharts";
 import { useEffect } from "react";
@@ -11,21 +11,18 @@ import Login from "./Login";
 
 function accFromDb(row) {
   return {
-    id: row.id,
-    name: row.name,
-    type: row.type,
-    statementDay: row.statement_day,
-    dueDay: row.due_day,
+    id: row.id, name: row.name, type: row.type,
+    statementDay: row.statement_day, dueDay: row.due_day,
     includeNetWorth: row.include_net_worth,
+    openingBalance: row.opening_balance || 0,
   };
 }
 function accToDb(a) {
   return {
-    name: a.name,
-    type: a.type,
-    statement_day: a.statementDay || null,
-    due_day: a.dueDay || null,
+    name: a.name, type: a.type,
+    statement_day: a.statementDay || null, due_day: a.dueDay || null,
     include_net_worth: a.includeNetWorth,
+    opening_balance: a.openingBalance || 0,
   };
 }
 
@@ -170,23 +167,6 @@ function Chip({ label, active, onClick, onRemove }) {
   );
 }
 
-async function removeCategory(name, type) {
-  const { error } = await supabase.from("categories").delete().eq("name", name).eq("type", type);
-  if (error) { console.error(error); return; }
-  if (type === "expense") setExpenseCats(expenseCats.filter((x) => x !== name));
-  else setIncomeCats(incomeCats.filter((x) => x !== name));
-}
-async function removeVendor(name) {
-  const { error } = await supabase.from("vendors").delete().eq("name", name);
-  if (error) { console.error(error); return; }
-  setVendors(vendors.filter((x) => x !== name));
-}
-async function removeMember(name) {
-  const { error } = await supabase.from("members").delete().eq("name", name);
-  if (error) { console.error(error); return; }
-  setMembers(members.filter((x) => x !== name));
-}
-
 function Section({ title, children, right }) {
   return (
     <div className="pt-2">
@@ -208,6 +188,16 @@ function MetricCard({ label, value, color }) {
   );
 }
 
+function startEditTx(t) {
+  setEditingId(t.id);
+  setEntryType(t.type);
+  setForm({
+    date: t.date, amount: String(t.amount), category: t.category || "", member: t.member || "",
+    accountId: t.accountId || "", vendor: t.vendor || "", note: t.note || "",
+    fromAccountId: t.accountId || "", toAccountId: t.toAccountId || "",
+  });
+}
+
 export default function App() {
   const [session, setSession] = useState(null);
   const [checkingAuth, setCheckingAuth] = useState(true);
@@ -220,6 +210,8 @@ export default function App() {
   const [txs, setTxs] = useState([]);
   const [recurring, setRecurring] = useState([]);
   const [budgets, setBudgets] = useState([]);
+  const [editingId, setEditingId] = useState(null);
+  const [newAcc, setNewAcc] = useState({ name: "", type: "debit", statementDay: 15, dueDay: 5, includeNetWorth: true, openingBalance: "" });
 
   const [tab, setTab] = useState("nhap");
   const [entryType, setEntryType] = useState("expense");
@@ -240,7 +232,6 @@ export default function App() {
   const [newCatName, setNewCatName] = useState("");
   const [newVendorName, setNewVendorName] = useState("");
   const [newMemberName, setNewMemberName] = useState("");
-  const [newAcc, setNewAcc] = useState({ name: "", type: "debit", statementDay: 15, dueDay: 5, includeNetWorth: true });
   const [newRecurring, setNewRecurring] = useState({ name: "", amount: "", category: "", accountId: "", startDate: todayISO(), repeatValue: 1, repeatUnit: "month", cycleCount: "" });
   const [newBudget, setNewBudget] = useState({ category: "", limit: "" });
   
@@ -289,7 +280,7 @@ useEffect(() => {
   }
 }, [accounts]);
 
-  async function addTx() {
+ async function saveTx() {
   if (!form.amount || Number(form.amount) <= 0) return;
   let payload;
   if (entryType === "transfer") {
@@ -298,16 +289,40 @@ useEffect(() => {
   } else {
     payload = txToDb({ type: entryType, date: form.date, amount: Number(form.amount), category: form.category, member: form.member, accountId: form.accountId, vendor: form.vendor, note: form.note });
   }
-  const { data, error } = await supabase.from("transactions").insert(payload).select().single();
-  if (error) { console.error(error); return; }
-  setTxs([txFromDb(data), ...txs]);
-  setForm({ ...form, amount: "", note: "", vendor: "" });
+  if (editingId) {
+    const { data, error } = await supabase.from("transactions").update(payload).eq("id", editingId).select().single();
+    if (error) { console.error(error); return; }
+    setTxs(txs.map((t) => t.id === editingId ? txFromDb(data) : t));
+    setEditingId(null);
+  } else {
+    const { data, error } = await supabase.from("transactions").insert(payload).select().single();
+    if (error) { console.error(error); return; }
+    setTxs([txFromDb(data), ...txs]);
   }
+  setForm({ ...form, amount: "", note: "", vendor: "" });
+}
 
   async function removeTx(id) {
     const { error } = await supabase.from("transactions").delete().eq("id", id);
     if (error) { console.error(error); return; }
     setTxs(txs.filter((t) => t.id !== id));
+  }
+
+  async function removeCategory(name, type) {
+  const { error } = await supabase.from("categories").delete().eq("name", name).eq("type", type);
+  if (error) { console.error(error); return; }
+  if (type === "expense") setExpenseCats(expenseCats.filter((x) => x !== name));
+  else setIncomeCats(incomeCats.filter((x) => x !== name));
+  }
+  async function removeVendor(name) {
+    const { error } = await supabase.from("vendors").delete().eq("name", name);
+    if (error) { console.error(error); return; }
+    setVendors(vendors.filter((x) => x !== name));
+  }
+  async function removeMember(name) {
+    const { error } = await supabase.from("members").delete().eq("name", name);
+    if (error) { console.error(error); return; }
+    setMembers(members.filter((x) => x !== name));
   }
 
 async function addCategory() {
@@ -333,15 +348,19 @@ async function addMember() {
   setMembers([...members, newMemberName.trim()]);
   setNewMemberName("");
 }
+
   async function addAccount() {
   if (!newAcc.name.trim()) return;
-  const payload = accToDb({ ...newAcc, statementDay: Number(newAcc.statementDay), dueDay: Number(newAcc.dueDay) });
+  const payload = accToDb({ ...newAcc, statementDay: Number(newAcc.statementDay), dueDay: Number(newAcc.dueDay), openingBalance: Number(newAcc.openingBalance) || 0 });
   const { data, error } = await supabase.from("accounts").insert(payload).select().single();
   if (error) { console.error(error); return; }
   setAccounts([...accounts, accFromDb(data)]);
-  setNewAcc({ name: "", type: "debit", statementDay: 15, dueDay: 5, includeNetWorth: true });
-  }
+  setNewAcc({ name: "", type: "debit", statementDay: 15, dueDay: 5, includeNetWorth: true, openingBalance: "" });
+}
+
   async function removeAccount(id) {
+  const acc = accounts.find((a) => a.id === id);
+  if (!window.confirm('Xóa tài khoản "' + (acc?.name || "") + '"? Các giao dịch liên quan sẽ không bị xóa nhưng có thể hiển thị lỗi.')) return;
   const { error } = await supabase.from("accounts").delete().eq("id", id);
   if (error) { console.error(error); return; }
   setAccounts(accounts.filter((a) => a.id !== id));
@@ -364,6 +383,7 @@ async function addMember() {
   }
 
   async function removeRecurring(id) {
+  if (!window.confirm("Xóa khoản định kỳ này?")) return;
   const { error } = await supabase.from("recurring_items").delete().eq("id", id);
   if (error) { console.error(error); return; }
   setRecurring(recurring.filter((r) => r.id !== id));
@@ -397,16 +417,17 @@ async function addMember() {
   }
 
   async function removeBudget(cat) {
-    const b = budgets.find((x) => x.category === cat);
-    if (!b) return;
-    const { error } = await supabase.from("budgets").delete().eq("id", b.id);
-    if (error) { console.error(error); return; }
-    setBudgets(budgets.filter((x) => x.category !== cat));
+  if (!window.confirm('Xóa ngân sách "' + cat + '"?')) return;
+  const b = budgets.find((x) => x.category === cat);
+  if (!b) return;
+  const { error } = await supabase.from("budgets").delete().eq("id", b.id);
+  if (error) { console.error(error); return; }
+  setBudgets(budgets.filter((x) => x.category !== cat));
   }
 
   const balances = useMemo(() => {
     const bal = {};
-    accounts.forEach((a) => (bal[a.id] = 0));
+    accounts.forEach((a) => (bal[a.id] = a.openingBalance || 0));  // ← đổi từ 0 thành a.openingBalance
     txs.forEach((t) => {
       if (t.type === "income") bal[t.accountId] = (bal[t.accountId] || 0) + t.amount;
       if (t.type === "expense") bal[t.accountId] = (bal[t.accountId] || 0) - t.amount;
@@ -485,9 +506,12 @@ async function addMember() {
   const recentList = useMemo(() => txs.filter((t) => inPeriod(t.date, txPeriod)).slice(0, 10), [txs, txPeriod]);
 
   const inputStyle = `
+     * { box-sizing: border-box; }
+    html { font-size: 18.4px; }  /* 16px mặc định × 1.15 */
     input, select {
+      width: 100%;
       background: ${COLORS.surface2}; border: 1px solid ${COLORS.border}; color: ${COLORS.textPrimary};
-      border-radius: 6px; padding: 10px 12px; font-size: 14px; width: 100%;
+      border-radius: 6px; padding: 10px 12px; font-size: 16px; width: 100%;
     }
     input::placeholder { color: ${COLORS.textMuted}; }
     input:focus, select:focus { outline: none; border-color: ${COLORS.cream}; }
@@ -611,9 +635,14 @@ async function addMember() {
             </>
           )}
 
-          <button onClick={addTx} className="w-full py-3 rounded-md sans text-sm flex items-center justify-center gap-2" style={{ background: COLORS.cream, color: COLORS.bg, fontWeight: 600, border: "none" }}>
-            <Plus size={16} /> Lưu giao dịch
+          <button onClick={saveTx} className="w-full py-3 rounded-md sans text-sm flex items-center justify-center gap-2" style={{ background: COLORS.cream, color: COLORS.bg, fontWeight: 600, border: "none" }}>
+            <Plus size={16} /> {editingId ? "Cập nhật giao dịch" : "Lưu giao dịch"}
           </button>
+          {editingId && (
+            <button onClick={() => { setEditingId(null); setForm({ ...form, amount: "", note: "", vendor: "" }); }} className="w-full py-2 rounded-md sans text-xs" style={{ border: "1px solid " + COLORS.border, color: COLORS.textMuted }}>
+              Hủy sửa
+            </button>
+          )}
 
           <div className="pt-2">
             <div className="flex gap-2 mb-3">
@@ -642,6 +671,7 @@ async function addMember() {
                   </div>
                   <div className="flex items-center gap-3">
                     <span className="mono text-sm" style={{ color }}>{sign}{fmtVND(t.amount)}</span>
+                    <button onClick={() => startEditTx(t)} style={{ color: COLORS.textMuted }}><Pencil size={14} /></button>
                     <button onClick={() => removeTx(t.id)} style={{ color: COLORS.textMuted }}><Trash2 size={14} /></button>
                   </div>
                 </div>
@@ -957,6 +987,7 @@ async function addMember() {
                 <input type="checkbox" checked={newAcc.includeNetWorth} onChange={(e) => setNewAcc({ ...newAcc, includeNetWorth: e.target.checked })} style={{ width: "auto" }} />
                 Tính vào tổng tài sản
               </label>
+              <div><label className="lbl">Số dư đầu kỳ</label><AmountInput value={newAcc.openingBalance} onChange={(v) => setNewAcc({ ...newAcc, openingBalance: v })} /></div>
               <button onClick={addAccount} className="w-full py-2.5 rounded-md sans text-sm" style={{ border: "1px solid " + COLORS.cream, color: COLORS.cream }}>+ Thêm tài khoản</button>
             </div>
           </Section>
