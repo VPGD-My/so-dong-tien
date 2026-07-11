@@ -506,25 +506,27 @@ async function addMember() {
   const recentList = useMemo(() => txs.filter((t) => inPeriod(t.date, txPeriod)).slice(0, 10), [txs, txPeriod]);
 
   const inputStyle = `
-     * { box-sizing: border-box; }
-    html { font-size: 18.4px; }  /* 16px mặc định × 1.15 */
-    input, select {
-      width: 100%;
-      background: ${COLORS.surface2}; border: 1px solid ${COLORS.border}; color: ${COLORS.textPrimary};
-      border-radius: 6px; padding: 10px 12px; font-size: 16px; width: 100%;
-    }
-      input[type="date"] {
-      width: 100%;
-      min-width: 0;
-      max-width: 100%;
-    }
-    input::placeholder { color: ${COLORS.textMuted}; }
-    input:focus, select:focus { outline: none; border-color: ${COLORS.cream}; }
-    .mono { font-family: 'JetBrains Mono', monospace; }
-    .sans { font-family: system-ui, -apple-system, sans-serif; }
-    .ledger-line { border-bottom: 1px dashed ${COLORS.border}; }
-    .lbl { font-size: 12px; color: ${COLORS.textSecondary}; display:block; margin-bottom: 4px; }
-  `;
+  * { box-sizing: border-box; }
+  html, body { overflow-x: hidden; max-width: 100vw; }
+  html { font-size: 18.4px; }
+  input, select {
+    background: ${COLORS.surface2}; border: 1px solid ${COLORS.border}; color: ${COLORS.textPrimary};
+    border-radius: 6px; padding: 10px 12px; font-size: 16px; width: 100%;
+  }
+  input[type="date"] {
+    width: 100% !important;
+    box-sizing: border-box !important;
+    min-width: 0 !important;
+    max-width: 100% !important;
+    padding: 10px 8px !important;
+  }
+  input::placeholder { color: ${COLORS.textMuted}; }
+  input:focus, select:focus { outline: none; border-color: ${COLORS.cream}; }
+  .mono { font-family: 'JetBrains Mono', monospace; }
+  .sans { font-family: system-ui, -apple-system, sans-serif; }
+  .ledger-line { border-bottom: 1px dashed ${COLORS.border}; }
+  .lbl { font-size: 12px; color: ${COLORS.textSecondary}; display:block; margin-bottom: 4px; }
+`;
 
   const unitLabel = (u) => REPEAT_UNITS.find((x) => x.v === u)?.l || u;
 
