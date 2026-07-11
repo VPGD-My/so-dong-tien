@@ -513,6 +513,11 @@ async function addMember() {
       background: ${COLORS.surface2}; border: 1px solid ${COLORS.border}; color: ${COLORS.textPrimary};
       border-radius: 6px; padding: 10px 12px; font-size: 16px; width: 100%;
     }
+      input[type="date"] {
+      width: 100%;
+      min-width: 0;
+      max-width: 100%;
+    }
     input::placeholder { color: ${COLORS.textMuted}; }
     input:focus, select:focus { outline: none; border-color: ${COLORS.cream}; }
     .mono { font-family: 'JetBrains Mono', monospace; }
