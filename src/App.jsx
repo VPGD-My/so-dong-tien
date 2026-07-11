@@ -514,11 +514,18 @@ async function addMember() {
     border-radius: 6px; padding: 10px 12px; font-size: 16px; width: 100%;
   }
   input[type="date"] {
-    width: 100% !important;
-    box-sizing: border-box !important;
-    min-width: 0 !important;
-    max-width: 100% !important;
-    padding: 10px 8px !important;
+    width: 100%;
+    box-sizing: border-box;
+    border: none;
+    background: transparent;
+    padding: 10px 8px;
+  }
+  .date-wrap {
+    background: ${COLORS.surface2};
+    border: 1px solid ${COLORS.border};
+    border-radius: 6px;
+    overflow: hidden;
+    width: 100%;
   }
   input::placeholder { color: ${COLORS.textMuted}; }
   input:focus, select:focus { outline: none; border-color: ${COLORS.cream}; }
@@ -574,7 +581,12 @@ async function addMember() {
             ))}
           </div>
 
-          <div><label className="lbl">Ngày</label><input type="date" value={form.date} onChange={(e) => setForm({ ...form, date: e.target.value })} /></div>
+          <div>
+            <label className="lbl">Ngày</label>
+            <div className="date-wrap">
+              <input type="date" value={form.date} onChange={(e) => setForm({ ...form, date: e.target.value })} />
+            </div>
+          </div>
           <div><label className="lbl">Số tiền</label><AmountInput value={form.amount} onChange={(v) => setForm({ ...form, amount: v })} /></div>
 
           {entryType === "transfer" ? (
