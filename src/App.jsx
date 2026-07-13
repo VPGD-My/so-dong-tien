@@ -13,16 +13,20 @@ function accFromDb(row) {
   return {
     id: row.id, name: row.name, type: row.type,
     statementDay: row.statement_day, dueDay: row.due_day,
+    dueMonthOffset: row.due_month_offset ?? 1,
     includeNetWorth: row.include_net_worth,
     openingBalance: row.opening_balance || 0,
+    creditLimit: row.credit_limit || 0,
   };
 }
 function accToDb(a) {
   return {
     name: a.name, type: a.type,
     statement_day: a.statementDay || null, due_day: a.dueDay || null,
+    due_month_offset: a.dueMonthOffset ?? 1,
     include_net_worth: a.includeNetWorth,
     opening_balance: a.openingBalance || 0,
+    credit_limit: a.creditLimit || 0,
   };
 }
 
@@ -118,14 +122,29 @@ function monthLabel(key) {
   return `Tháng ${parseInt(m)}/${y}`;
 }
 function fmtVND(n) { return Math.round(n || 0).toLocaleString("vi-VN") + " đ"; }
-function todayISO() { return "2026-07-10"; }
+function todayISO() {
+  const d = new Date();
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
+function firstDayThisMonth() {
+  const d = new Date();
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-01`;
+}
+function lastDayNextMonth() {
+  const d = new Date();
+  const end = new Date(d.getFullYear(), d.getMonth() + 2, 0); // ngày 0 của tháng+2 = ngày cuối của tháng+1
+  return `${end.getFullYear()}-${pad(end.getMonth() + 1)}-${pad(end.getDate())}`;
+}
 
 function getCashFlowDate(tx, account) {
   const txDate = new Date(tx.date + "T00:00:00");
   if (!account || account.type !== "credit") return txDate;
   const day = txDate.getDate();
   const belongsNext = day > account.statementDay;
-  const dueMonth = txDate.getMonth() + (belongsNext ? 2 : 1);
+  const statementMonth = txDate.getMonth() + (belongsNext ? 1 : 0);
+  const offset = account.dueMonthOffset ?? 1; // 0 = hạn TT cùng tháng chốt sao kê, 1 = hạn TT tháng sau
+  const dueMonth = statementMonth + offset;
   return new Date(txDate.getFullYear(), dueMonth, account.dueDay);
 }
 
@@ -167,9 +186,9 @@ function Chip({ label, active, onClick, onRemove }) {
   );
 }
 
-function Section({ title, children, right }) {
+function Section({ title, children, right, id }) {
   return (
-    <div className="pt-2">
+    <div className="pt-2" id={id}>
       <div className="flex items-center justify-between mb-3">
         <p className="sans text-xs" style={{ color: COLORS.textSecondary, letterSpacing: 0.4 }}>{title}</p>
         {right}
@@ -188,14 +207,114 @@ function MetricCard({ label, value, color }) {
   );
 }
 
-function startEditTx(t) {
-  setEditingId(t.id);
-  setEntryType(t.type);
-  setForm({
-    date: t.date, amount: String(t.amount), category: t.category || "", member: t.member || "",
-    accountId: t.accountId || "", vendor: t.vendor || "", note: t.note || "",
-    fromAccountId: t.accountId || "", toAccountId: t.toAccountId || "",
-  });
+  function CategoryRow({ label, amount, max, color, txList }) {
+    const [open, setOpen] = useState(false);
+    return (
+      <div className="mb-2">
+        <div className="flex items-center gap-3" style={{ cursor: "pointer" }} onClick={() => setOpen(!open)}>
+          <span className="sans text-xs w-20" style={{ color: COLORS.textSecondary }}>{label}</span>
+          <div className="flex-1 h-2 rounded-full" style={{ background: COLORS.surface2 }}>
+            <div className="h-2 rounded-full" style={{ width: `${(amount / max) * 100}%`, background: color }} />
+          </div>
+          <span className="mono text-xs w-24 text-right">{fmtVND(amount)}</span>
+        </div>
+        {open && (
+          <div className="pl-2 mt-1.5 space-y-1">
+            {txList.map((t) => (
+              <div key={t.id} className="flex justify-between sans text-xs" style={{ color: COLORS.textMuted }}>
+                <span>{fmtDate(t.date)} · {t.note || t.vendor || "—"}</span>
+                <span className="mono">{fmtVND(t.amount)}</span>
+              </div>
+            ))}
+            {txList.length === 0 && <p className="sans text-xs" style={{ color: COLORS.textMuted }}>Không có giao dịch.</p>}
+          </div>
+        )}
+      </div>
+    );
+  }
+
+function AccountReportCard({ account, data, balance, txList }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="rounded-lg p-3" style={{ background: COLORS.surface, border: "1px solid " + COLORS.border, cursor: "pointer" }} onClick={() => setOpen(!open)}>
+      <div className="flex items-center gap-2 mb-2"><AccIcon type={account.type} size={15} color={COLORS.cream} /><span className="sans text-sm">{account.name}</span></div>
+      <div className="sans text-xs" style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr" }}>
+        <span style={{ color: COLORS.accent, textAlign: "left" }}>Thu: {fmtVND(data.income)}</span>
+        <span style={{ color: COLORS.expense, textAlign: "center" }}>Chi: {fmtVND(data.expense)}</span>
+        <span className="mono" style={{ color: COLORS.cream, textAlign: "right" }}>Số dư: {fmtVND(balance)}</span>
+      </div>
+      {open && (
+        <div className="mt-2 pt-2 space-y-1" style={{ borderTop: "1px dashed " + COLORS.border }}>
+          {txList.map((t) => (
+            <div key={t.id} className="flex justify-between sans text-xs" style={{ color: COLORS.textMuted }}>
+              <span>{fmtDate(t.date)} · {t.note || t.category || (t.type === "transfer" ? "Chuyển khoản" : "")}</span>
+              <span className="mono" style={{ color: t.type === "income" ? COLORS.accent : t.type === "transfer" ? COLORS.transfer : COLORS.expense }}>
+                {t.type === "income" ? "+" : t.type === "transfer" ? "" : "-"}{fmtVND(t.amount)}
+              </span>
+            </div>
+          ))}
+          {txList.length === 0 && <p className="sans text-xs" style={{ color: COLORS.textMuted }}>Không có giao dịch.</p>}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function MemberReportCard({ member, data, txList }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="rounded-lg p-3" style={{ background: COLORS.surface, border: "1px solid " + COLORS.border, cursor: "pointer" }} onClick={() => setOpen(!open)}>
+      <p className="sans text-sm mb-2">{member}</p>
+      <div className="sans text-xs" style={{ display: "grid", gridTemplateColumns: "1fr 1fr" }}>
+        <span style={{ color: COLORS.accent, textAlign: "left" }}>Thu: {fmtVND(data.income)}</span>
+        <span style={{ color: COLORS.expense, textAlign: "right" }}>Chi: {fmtVND(data.expense)}</span>
+      </div>
+      {open && (
+        <div className="mt-2 pt-2 space-y-1" style={{ borderTop: "1px dashed " + COLORS.border }}>
+          {txList.map((t) => (
+            <div key={t.id} className="flex justify-between sans text-xs" style={{ color: COLORS.textMuted }}>
+              <span>{fmtDate(t.date)} · {t.note || t.category}</span>
+              <span className="mono" style={{ color: t.type === "income" ? COLORS.accent : COLORS.expense }}>
+                {t.type === "income" ? "+" : "-"}{fmtVND(t.amount)}
+              </span>
+            </div>
+          ))}
+          {txList.length === 0 && <p className="sans text-xs" style={{ color: COLORS.textMuted }}>Không có giao dịch.</p>}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function MonthReportCard({ monthKeyStr, data, txList }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="rounded-lg p-3" style={{ background: COLORS.surface, border: "1px solid " + COLORS.border, cursor: "pointer" }} onClick={() => setOpen(!open)}>
+      <div className="flex items-center justify-between mb-2">
+        <span className="sans text-sm" style={{ fontWeight: 600 }}>{monthLabel(monthKeyStr)}</span>
+        <span className="mono text-sm" style={{ color: data.income - data.expense >= 0 ? COLORS.accent : COLORS.expense }}>
+          {data.income - data.expense >= 0 ? "+" : ""}{fmtVND(data.income - data.expense)}
+        </span>
+      </div>
+      <div className="sans text-xs" style={{ display: "grid", gridTemplateColumns: "1fr 1fr" }}>
+        <span style={{ color: COLORS.accent, textAlign: "left" }}>Thu: {fmtVND(data.income)}</span>
+        <span style={{ color: COLORS.expense, textAlign: "right" }}>Chi: {fmtVND(data.expense)}</span>
+      </div>
+      {open && (
+        <div className="mt-2 pt-2 space-y-1" style={{ borderTop: "1px dashed " + COLORS.border }}>
+          {txList.map((t) => (
+            <div key={t.id} className="flex justify-between sans text-xs" style={{ color: COLORS.textMuted }}>
+              <span>{fmtDate(t.date)} · {t.note || t.category}</span>
+              <span className="mono" style={{ color: t.type === "income" ? COLORS.accent : COLORS.expense }}>
+                {t.type === "income" ? "+" : "-"}{fmtVND(t.amount)}
+              </span>
+            </div>
+          ))}
+          {txList.length === 0 && <p className="sans text-xs" style={{ color: COLORS.textMuted }}>Không có giao dịch.</p>}
+        </div>
+      )}
+    </div>
+  );
 }
 
 export default function App() {
@@ -211,15 +330,17 @@ export default function App() {
   const [recurring, setRecurring] = useState([]);
   const [budgets, setBudgets] = useState([]);
   const [editingId, setEditingId] = useState(null);
-  const [newAcc, setNewAcc] = useState({ name: "", type: "debit", statementDay: 15, dueDay: 5, includeNetWorth: true, openingBalance: "" });
+  const [editingAccId, setEditingAccId] = useState(null);
+  const [toast, setToast] = useState("");
+  const [newAcc, setNewAcc] = useState({ name: "", type: "debit", statementDay: 15, dueDay: 5, dueMonthOffset: 1, includeNetWorth: true, openingBalance: "", creditLimit: "" });
 
   const [tab, setTab] = useState("nhap");
   const [entryType, setEntryType] = useState("expense");
   const [txPeriod, setTxPeriod] = useState("month");
   const [reportView, setReportView] = useState("danhmuc");
   const [dateBasis, setDateBasis] = useState("phatsinh");
-  const [reportFrom, setReportFrom] = useState("2026-06-01");
-  const [reportTo, setReportTo] = useState("2026-07-31");
+  const [reportFrom, setReportFrom] = useState(firstDayThisMonth());
+  const [reportTo, setReportTo] = useState(lastDayNextMonth());
 
   const accById = (id) => accounts.find((a) => a.id === id);
 
@@ -232,7 +353,7 @@ export default function App() {
   const [newCatName, setNewCatName] = useState("");
   const [newVendorName, setNewVendorName] = useState("");
   const [newMemberName, setNewMemberName] = useState("");
-  const [newRecurring, setNewRecurring] = useState({ name: "", amount: "", category: "", accountId: "", startDate: todayISO(), repeatValue: 1, repeatUnit: "month", cycleCount: "" });
+  const [newRecurring, setNewRecurring] = useState({ name: "", amount: "", category: "", accountId: "", startDate: todayISO(), repeatValue: 1, repeatUnit: "month", cycleCount: "", principal: "", isInstallment: false });
   const [newBudget, setNewBudget] = useState({ category: "", limit: "" });
   
 useEffect(() => {
@@ -280,6 +401,13 @@ useEffect(() => {
   }
 }, [accounts]);
 
+useEffect(() => {
+  if (newRecurring.isInstallment && newRecurring.principal && Number(newRecurring.cycleCount) > 0) {
+    const per = Math.round(Number(newRecurring.principal) / Number(newRecurring.cycleCount));
+    setNewRecurring((r) => ({ ...r, amount: String(per) }));
+  }
+}, [newRecurring.isInstallment, newRecurring.principal, newRecurring.cycleCount]);
+
  async function saveTx() {
   if (!form.amount || Number(form.amount) <= 0) return;
   let payload;
@@ -294,18 +422,37 @@ useEffect(() => {
     if (error) { console.error(error); return; }
     setTxs(txs.map((t) => t.id === editingId ? txFromDb(data) : t));
     setEditingId(null);
+    showToast("Đã cập nhật giao dịch");
   } else {
     const { data, error } = await supabase.from("transactions").insert(payload).select().single();
     if (error) { console.error(error); return; }
     setTxs([txFromDb(data), ...txs]);
   }
   setForm({ ...form, amount: "", note: "", vendor: "" });
+  showToast("Đã lưu giao dịch");
 }
 
   async function removeTx(id) {
     const { error } = await supabase.from("transactions").delete().eq("id", id);
     if (error) { console.error(error); return; }
     setTxs(txs.filter((t) => t.id !== id));
+    showToast("Đã xóa giao dịch");
+  }
+
+  function showToast(msg) {
+    setToast(msg);
+    setTimeout(() => setToast(""), 2000);
+  }
+
+  function startEditTx(t) {
+    setEditingId(t.id);
+    setEntryType(t.type);
+    setForm({
+      date: t.date, amount: String(t.amount), category: t.category || "", member: t.member || "",
+      accountId: t.accountId || "", vendor: t.vendor || "", note: t.note || "",
+      fromAccountId: t.accountId || "", toAccountId: t.toAccountId || "",
+    });
+    window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
   async function removeCategory(name, type) {
@@ -313,16 +460,19 @@ useEffect(() => {
   if (error) { console.error(error); return; }
   if (type === "expense") setExpenseCats(expenseCats.filter((x) => x !== name));
   else setIncomeCats(incomeCats.filter((x) => x !== name));
+  showToast("Đã xóa danh mục");
   }
   async function removeVendor(name) {
     const { error } = await supabase.from("vendors").delete().eq("name", name);
     if (error) { console.error(error); return; }
     setVendors(vendors.filter((x) => x !== name));
+    showToast("Đã xóa NCC");
   }
   async function removeMember(name) {
     const { error } = await supabase.from("members").delete().eq("name", name);
     if (error) { console.error(error); return; }
     setMembers(members.filter((x) => x !== name));
+    showToast("Đã xóa thành viên");
   }
 
 async function addCategory() {
@@ -332,6 +482,7 @@ async function addCategory() {
   if (newCatType === "income") setIncomeCats([...incomeCats, newCatName.trim()]);
   else setExpenseCats([...expenseCats, newCatName.trim()]);
   setNewCatName("");
+  showToast("Đã thêm danh mục");
 }
 
 async function addVendor() {
@@ -340,6 +491,7 @@ async function addVendor() {
   if (error) { console.error(error); return; }
   setVendors([...vendors, newVendorName.trim()]);
   setNewVendorName("");
+  showToast("Đã thêm NCC");
 }
 async function addMember() {
   if (!newMemberName.trim()) return;
@@ -347,15 +499,37 @@ async function addMember() {
   if (error) { console.error(error); return; }
   setMembers([...members, newMemberName.trim()]);
   setNewMemberName("");
+  showToast("Đã thêm thành viên");
 }
 
-  async function addAccount() {
+  async function saveAccount() {
   if (!newAcc.name.trim()) return;
-  const payload = accToDb({ ...newAcc, statementDay: Number(newAcc.statementDay), dueDay: Number(newAcc.dueDay), openingBalance: Number(newAcc.openingBalance) || 0 });
-  const { data, error } = await supabase.from("accounts").insert(payload).select().single();
-  if (error) { console.error(error); return; }
-  setAccounts([...accounts, accFromDb(data)]);
-  setNewAcc({ name: "", type: "debit", statementDay: 15, dueDay: 5, includeNetWorth: true, openingBalance: "" });
+  const payload = accToDb({ ...newAcc, statementDay: Number(newAcc.statementDay), dueDay: Number(newAcc.dueDay), openingBalance: Number(newAcc.openingBalance) || 0, creditLimit: Number(newAcc.creditLimit) || 0 });
+  if (editingAccId) {
+    const { data, error } = await supabase.from("accounts").update(payload).eq("id", editingAccId).select().single();
+    if (error) { console.error(error); return; }
+    setAccounts(accounts.map((a) => a.id === editingAccId ? accFromDb(data) : a));
+    setEditingAccId(null);
+    showToast("Đã cập nhật tài khoản");
+  } else {
+    const { data, error } = await supabase.from("accounts").insert(payload).select().single();
+    if (error) { console.error(error); return; }
+    setAccounts([...accounts, accFromDb(data)]);
+    showToast("Đã tạo tài khoản");
+  }
+  
+setNewAcc({ name: "", type: "debit", statementDay: 15, dueDay: 5, dueMonthOffset: 1, includeNetWorth: true, openingBalance: "", creditLimit: "" });
+}
+
+function startEditAccount(a) {
+  setEditingAccId(a.id);
+  setNewAcc({
+    name: a.name, type: a.type, statementDay: a.statementDay || 15, dueDay: a.dueDay || 5,
+    dueMonthOffset: a.dueMonthOffset ?? 1,
+    includeNetWorth: a.includeNetWorth, openingBalance: String(a.openingBalance || ""), creditLimit: String(a.creditLimit || ""),
+  });
+  setTab("caidat");
+  setTimeout(() => document.getElementById("add-account-section")?.scrollIntoView({ behavior: "smooth" }), 100);
 }
 
   async function removeAccount(id) {
@@ -364,6 +538,7 @@ async function addMember() {
   const { error } = await supabase.from("accounts").delete().eq("id", id);
   if (error) { console.error(error); return; }
   setAccounts(accounts.filter((a) => a.id !== id));
+  showToast("Đã xóa tài khoản");
   }
 
   async function toggleNetWorth(id) {
@@ -374,12 +549,13 @@ async function addMember() {
   }
 
   async function addRecurring() {
-  if (!newRecurring.name.trim() || !newRecurring.amount) return;
-  const payload = recToDb({ ...newRecurring, amount: Number(newRecurring.amount), repeatValue: Number(newRecurring.repeatValue) || 1 });
-  const { data, error } = await supabase.from("recurring_items").insert(payload).select().single();
-  if (error) { console.error(error); return; }
-  setRecurring([...recurring, recFromDb(data)]);
-  setNewRecurring({ name: "", amount: "", category: expenseCats[0] || "", accountId: accounts[0]?.id || "", startDate: todayISO(), repeatValue: 1, repeatUnit: "month", cycleCount: "" });
+    if (!newRecurring.name.trim() || !newRecurring.amount) return;
+    const payload = recToDb({ ...newRecurring, amount: Number(newRecurring.amount), repeatValue: Number(newRecurring.repeatValue) || 1 });
+    const { data, error } = await supabase.from("recurring_items").insert(payload).select().single();
+    if (error) { console.error(error); return; }
+    setRecurring([...recurring, recFromDb(data)]);
+    setNewRecurring({ name: "", amount: "", category: expenseCats[0] || "", accountId: accounts[0]?.id || "", startDate: todayISO(), repeatValue: 1, repeatUnit: "month", cycleCount: "", principal: "", isInstallment: false });
+    showToast("Đã thêm khoản định kỳ");
   }
 
   async function removeRecurring(id) {
@@ -387,6 +563,7 @@ async function addMember() {
   const { error } = await supabase.from("recurring_items").delete().eq("id", id);
   if (error) { console.error(error); return; }
   setRecurring(recurring.filter((r) => r.id !== id));
+  showToast("Đã xóa khoản định kỳ");
   }
 
  async function logRecurring(r) {
@@ -395,6 +572,7 @@ async function addMember() {
   const { data, error } = await supabase.from("transactions").insert(payload).select().single();
   if (error) { console.error(error); return; }
   setTxs([txFromDb(data), ...txs]);
+  showToast("Đã ghi nhận");
 
   const { error: err2 } = await supabase.from("recurring_items").update({ done_count: r.doneCount + 1 }).eq("id", r.id);
   if (err2) { console.error(err2); return; }
@@ -414,6 +592,7 @@ async function addMember() {
       setBudgets([...budgets, { id: data.id, category: data.category, limit: data.monthly_limit }]);
     }
     setNewBudget({ category: expenseCats[0] || "", limit: "" });
+    showToast("Đã lưu ngân sách");
   }
 
   async function removeBudget(cat) {
@@ -423,6 +602,7 @@ async function addMember() {
   const { error } = await supabase.from("budgets").delete().eq("id", b.id);
   if (error) { console.error(error); return; }
   setBudgets(budgets.filter((x) => x.category !== cat));
+  showToast("Đã xóa ngân sách");
   }
 
   const balances = useMemo(() => {
@@ -448,7 +628,13 @@ async function addMember() {
     return getCashFlowDate(t, accById(t.accountId));
   }
 
-  const filteredTxs = useMemo(() => txs.filter((t) => t.date >= reportFrom && t.date <= reportTo), [txs, reportFrom, reportTo]);
+  const filteredTxs = useMemo(() => {
+    return txs.filter((t) => {
+      const d = effDate(t);
+      const key = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+      return key >= reportFrom && key <= reportTo;
+    });
+  }, [txs, reportFrom, reportTo, dateBasis, accounts]);
 
   const monthlyTotals = useMemo(() => {
     const groups = {};
@@ -462,10 +648,17 @@ async function addMember() {
   }, [filteredTxs, dateBasis]);
 
   const byAccount = useMemo(() => {
-    const g = {};
-    filteredTxs.filter((t) => t.type !== "transfer").forEach((t) => {
-      g[t.accountId] = g[t.accountId] || { income: 0, expense: 0 };
-      g[t.accountId][t.type] += t.amount;
+  const g = {};
+    filteredTxs.forEach((t) => {
+      if (t.type === "transfer") {
+        g[t.accountId] = g[t.accountId] || { income: 0, expense: 0 };
+        g[t.accountId].expense += t.amount;
+        g[t.toAccountId] = g[t.toAccountId] || { income: 0, expense: 0 };
+        g[t.toAccountId].income += t.amount;
+      } else {
+        g[t.accountId] = g[t.accountId] || { income: 0, expense: 0 };
+        g[t.accountId][t.type] += t.amount;
+      }
     });
     return g;
   }, [filteredTxs]);
@@ -488,6 +681,14 @@ async function addMember() {
     return { exp, inc };
   }, [filteredTxs]);
 
+  const byVendor = useMemo(() => {
+    const g = {};
+    filteredTxs.filter((t) => t.type === "expense" && t.vendor).forEach((t) => {
+      g[t.vendor] = (g[t.vendor] || 0) + t.amount;
+    });
+    return g;
+  }, [filteredTxs]);
+
   const pieExpense = useMemo(() => Object.entries(byCategory.exp).map(([name, value]) => ({ name, value })), [byCategory]);
   const pieIncome = useMemo(() => Object.entries(byCategory.inc).map(([name, value]) => ({ name, value })), [byCategory]);
 
@@ -503,11 +704,11 @@ async function addMember() {
   const periodTxs = useMemo(() => txs.filter((t) => t.type !== "transfer" && inPeriod(t.date, txPeriod)), [txs, txPeriod]);
   const periodIncome = periodTxs.filter((t) => t.type === "income").reduce((s, t) => s + t.amount, 0);
   const periodExpense = periodTxs.filter((t) => t.type === "expense").reduce((s, t) => s + t.amount, 0);
-  const recentList = useMemo(() => txs.filter((t) => inPeriod(t.date, txPeriod)).slice(0, 10), [txs, txPeriod]);
+  const recentList = useMemo(() => txs.filter((t) => inPeriod(t.date, txPeriod)), [txs, txPeriod]);
 
   const inputStyle = `
   * { box-sizing: border-box; }
-  html, body { overflow-x: hidden; max-width: 100vw; }
+  html, body { overflow-x: clip; max-width: 100vw; }
   html { font-size: 18.4px; }
   input, select {
     background: ${COLORS.surface2}; border: 1px solid ${COLORS.border}; color: ${COLORS.textPrimary};
@@ -648,7 +849,10 @@ async function addMember() {
 
               {entryType === "expense" && accById(form.accountId)?.type === "credit" && form.date && (
                 <div className="sans text-xs rounded-md px-3 py-2 flex items-center gap-2" style={{ background: "#26301F", color: COLORS.accent, border: "1px solid " + COLORS.border }}>
-                  <ArrowRight size={13} /> Tiền sẽ bị trừ thực vào {fmtDate(getCashFlowDate(form, accById(form.accountId)).toISOString().slice(0, 10))}
+                  <ArrowRight size={13} /> Tiền sẽ bị trừ thực vào {(() => {
+                    const d = getCashFlowDate(form, accById(form.accountId));
+                    return `${pad(d.getDate())}/${pad(d.getMonth() + 1)}/${d.getFullYear()}`;
+                  })()}
                 </div>
               )}
             </>
@@ -663,39 +867,47 @@ async function addMember() {
             </button>
           )}
 
-          <div className="pt-2">
-            <div className="flex gap-2 mb-3">
-              {[{ v: "today", l: "Hôm nay" }, { v: "week", l: "Tuần này" }, { v: "month", l: "Tháng này" }, { v: "all", l: "Tất cả" }].map((o) => (
-                <Chip key={o.v} label={o.l} active={txPeriod === o.v} onClick={() => setTxPeriod(o.v)} />
-              ))}
+         <div className="pt-2">
+            <div style={{ position: "sticky", top: 0, zIndex: 10, background: COLORS.bg, paddingTop: 8, paddingBottom: 8, marginBottom: 4 }}>
+              <div className="flex gap-2 mb-3">
+                {[{ v: "today", l: "Hôm nay" }, { v: "week", l: "Tuần này" }, { v: "month", l: "Tháng này" }, { v: "all", l: "Tất cả" }].map((o) => (
+                  <Chip key={o.v} label={o.l} active={txPeriod === o.v} onClick={() => setTxPeriod(o.v)} />
+                ))}
+              </div>
+              <div className="flex gap-3">
+                <MetricCard label="Tổng thu" value={periodIncome} color={COLORS.accent} />
+                <MetricCard label="Tổng chi" value={periodExpense} color={COLORS.expense} />
+              </div>
             </div>
-            <div className="flex gap-3 mb-4">
-              <MetricCard label="Tổng thu" value={periodIncome} color={COLORS.accent} />
-              <MetricCard label="Tổng chi" value={periodExpense} color={COLORS.expense} />
-            </div>
-            {recentList.map((t) => {
-              const acc = accById(t.accountId);
-              const color = t.type === "income" ? COLORS.accent : t.type === "transfer" ? COLORS.transfer : COLORS.expense;
-              const sign = t.type === "income" ? "+" : t.type === "transfer" ? "" : "-";
-              return (
-                <div key={t.id} className="ledger-line py-3 flex items-center justify-between">
-                  <div className="flex items-center gap-3">
-                    <div style={{ color: COLORS.textMuted }}><AccIcon type={acc?.type} /></div>
-                    <div>
-                      <p className="sans text-sm">{t.note || t.category || (t.type === "transfer" ? "Chuyển khoản" : "")}</p>
-                      <p className="sans text-xs" style={{ color: COLORS.textMuted }}>
-                        {t.type === "transfer" ? `${acc?.name} → ${accById(t.toAccountId)?.name}` : `${t.category}${t.vendor ? " · " + t.vendor : ""}`} · {fmtDate(t.date)}
-                      </p>
-                    </div>
+            
+           {recentList.map((t) => {
+            const acc = accById(t.accountId);
+            const color = t.type === "income" ? COLORS.accent : t.type === "transfer" ? COLORS.transfer : COLORS.expense;
+            const sign = t.type === "income" ? "+" : t.type === "transfer" ? "" : "-";
+            return (
+              <div key={t.id} className="ledger-line py-3 flex items-center justify-between" style={{ gap: 12 }}>
+                <div className="flex items-center gap-3" style={{ minWidth: 0, flex: 1 }}>
+                  <div style={{ color: COLORS.textMuted, flexShrink: 0 }}><AccIcon type={acc?.type} /></div>
+                  <div style={{ minWidth: 0 }}>
+                    <p className="sans text-sm" style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                      {t.note || t.category || (t.type === "transfer" ? "Chuyển khoản" : "")}
+                    </p>
+                    <p className="sans text-xs" style={{ color: COLORS.textMuted, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                      {t.type === "transfer" ? `${acc?.name} → ${accById(t.toAccountId)?.name}` : `${t.category}${t.vendor ? " · " + t.vendor : ""}`} · {fmtDate(t.date)}
+                    </p>
                   </div>
+                </div>
+                <div className="flex flex-col items-end gap-1" style={{ flexShrink: 0 }}>
+                  <span className="mono text-sm" style={{ color }}>{sign}{fmtVND(t.amount)}</span>
                   <div className="flex items-center gap-3">
-                    <span className="mono text-sm" style={{ color }}>{sign}{fmtVND(t.amount)}</span>
                     <button onClick={() => startEditTx(t)} style={{ color: COLORS.textMuted }}><Pencil size={14} /></button>
                     <button onClick={() => removeTx(t.id)} style={{ color: COLORS.textMuted }}><Trash2 size={14} /></button>
                   </div>
                 </div>
-              );
-            })}
+              </div>
+            );
+          })}
+
             {recentList.length === 0 && <p className="sans text-xs" style={{ color: COLORS.textMuted }}>Không có giao dịch trong khoảng này.</p>}
           </div>
         </div>
@@ -709,58 +921,43 @@ async function addMember() {
             <div className="flex-1"><label className="lbl">Đến ngày</label><input type="date" value={reportTo} onChange={(e) => setReportTo(e.target.value)} /></div>
           </div>
 
-          <div className="flex flex-wrap gap-2">
-            {[
-              { v: "danhmuc", l: "Theo danh mục" },
-              { v: "tytrong", l: "Tỷ trọng" },
-              { v: "taikhoan", l: "Theo tài khoản" },
-              { v: "thanhvien", l: "Theo thành viên" },
-              { v: "tonghop", l: "Tổng hợp tháng" },
-            ].map((o) => <Chip key={o.v} label={o.l} active={reportView === o.v} onClick={() => setReportView(o.v)} />)}
-          </div>
+        <div className="flex gap-2">
+          {[{ v: "phatsinh", l: "Theo ngày ghi nhận" }, { v: "dongtien", l: "Theo dòng tiền" }].map((o) => (
+            <button key={o.v} onClick={() => setDateBasis(o.v)} className="sans flex-1 py-2.5 rounded-md text-xs"
+              style={{ border: "1px solid " + (dateBasis === o.v ? COLORS.cream : COLORS.border), color: dateBasis === o.v ? COLORS.cream : COLORS.textSecondary, fontWeight: 600 }}>
+              {o.l}
+            </button>
+          ))}
+        </div>
 
-          {reportView === "tonghop" && (
-            <div className="flex gap-2">
-              {[{ v: "phatsinh", l: "Theo ngày ghi nhận" }, { v: "dongtien", l: "Theo dòng tiền" }].map((o) => (
-                <button key={o.v} onClick={() => setDateBasis(o.v)} className="sans flex-1 py-2 rounded-md text-xs"
-                  style={{ border: "1px solid " + (dateBasis === o.v ? COLORS.cream : COLORS.border), color: dateBasis === o.v ? COLORS.cream : COLORS.textSecondary }}>
-                  {o.l}
-                </button>
-              ))}
-            </div>
-          )}
-
+        <div className="flex flex-wrap gap-2">
+          {[
+            { v: "danhmuc", l: "Theo danh mục" },
+            { v: "ncc", l: "Theo NCC" },
+            { v: "tytrong", l: "Tỷ trọng" },
+            { v: "taikhoan", l: "Theo tài khoản" },
+            { v: "thanhvien", l: "Theo thành viên" },
+            { v: "tonghop", l: "Tổng hợp tháng" },
+          ].map((o) => <Chip key={o.v} label={o.l} active={reportView === o.v} onClick={() => setReportView(o.v)} />)}
+        </div>
+        
           {reportView === "danhmuc" && (
             <div className="space-y-6">
               <div>
-                <p className="sans text-xs mb-2" style={{ color: COLORS.textSecondary }}>Chi tiêu theo danh mục</p>
+                <p className="sans text-xs mb-2" style={{ color: COLORS.textSecondary }}>Chi tiêu theo danh mục (bấm để xem chi tiết)</p>
                 {Object.entries(byCategory.exp).sort((a, b) => b[1] - a[1]).map(([cat, amt]) => {
                   const max = Math.max(...Object.values(byCategory.exp));
-                  return (
-                    <div key={cat} className="flex items-center gap-3 mb-2">
-                      <span className="sans text-xs w-20" style={{ color: COLORS.textSecondary }}>{cat}</span>
-                      <div className="flex-1 h-2 rounded-full" style={{ background: COLORS.surface2 }}>
-                        <div className="h-2 rounded-full" style={{ width: `${(amt / max) * 100}%`, background: COLORS.expense }} />
-                      </div>
-                      <span className="mono text-xs w-24 text-right">{fmtVND(amt)}</span>
-                    </div>
-                  );
+                  const txList = filteredTxs.filter((t) => t.type === "expense" && t.category === cat);
+                  return <CategoryRow key={cat} label={cat} amount={amt} max={max} color={COLORS.expense} txList={txList} />;
                 })}
                 {pieExpense.length === 0 && <p className="sans text-xs" style={{ color: COLORS.textMuted }}>Không có dữ liệu trong khoảng ngày đã chọn.</p>}
               </div>
               <div>
-                <p className="sans text-xs mb-2" style={{ color: COLORS.textSecondary }}>Thu nhập theo danh mục</p>
+                <p className="sans text-xs mb-2" style={{ color: COLORS.textSecondary }}>Thu nhập theo danh mục (bấm để xem chi tiết)</p>
                 {Object.entries(byCategory.inc).sort((a, b) => b[1] - a[1]).map(([cat, amt]) => {
                   const max = Math.max(...Object.values(byCategory.inc));
-                  return (
-                    <div key={cat} className="flex items-center gap-3 mb-2">
-                      <span className="sans text-xs w-20" style={{ color: COLORS.textSecondary }}>{cat}</span>
-                      <div className="flex-1 h-2 rounded-full" style={{ background: COLORS.surface2 }}>
-                        <div className="h-2 rounded-full" style={{ width: `${(amt / max) * 100}%`, background: COLORS.accent }} />
-                      </div>
-                      <span className="mono text-xs w-24 text-right">{fmtVND(amt)}</span>
-                    </div>
-                  );
+                  const txList = filteredTxs.filter((t) => t.type === "income" && t.category === cat);
+                  return <CategoryRow key={cat} label={cat} amount={amt} max={max} color={COLORS.accent} txList={txList} />;
                 })}
               </div>
             </div>
@@ -807,50 +1004,39 @@ async function addMember() {
             <div className="space-y-2">
               {accounts.map((a) => {
                 const d = byAccount[a.id] || { income: 0, expense: 0 };
-                return (
-                  <div key={a.id} className="rounded-lg p-3" style={{ background: COLORS.surface, border: "1px solid " + COLORS.border }}>
-                    <div className="flex items-center gap-2 mb-2"><AccIcon type={a.type} size={15} color={COLORS.cream} /><span className="sans text-sm">{a.name}</span></div>
-                    <div className="flex justify-between sans text-xs">
-                      <span style={{ color: COLORS.accent }}>Thu: {fmtVND(d.income)}</span>
-                      <span style={{ color: COLORS.expense }}>Chi: {fmtVND(d.expense)}</span>
-                      <span className="mono" style={{ color: COLORS.cream }}>Số dư: {fmtVND(balances[a.id] || 0)}</span>
-                    </div>
-                  </div>
-                );
+                const txList = filteredTxs.filter((t) => t.accountId === a.id || t.toAccountId === a.id);
+                return <AccountReportCard key={a.id} account={a} data={d} balance={balances[a.id] || 0} txList={txList} />;
               })}
             </div>
           )}
 
           {reportView === "thanhvien" && (
             <div className="space-y-2">
-              {Object.entries(byMember).map(([m, d]) => (
-                <div key={m} className="rounded-lg p-3" style={{ background: COLORS.surface, border: "1px solid " + COLORS.border }}>
-                  <p className="sans text-sm mb-2">{m}</p>
-                  <div className="flex justify-between sans text-xs">
-                    <span style={{ color: COLORS.accent }}>Thu: {fmtVND(d.income)}</span>
-                    <span style={{ color: COLORS.expense }}>Chi: {fmtVND(d.expense)}</span>
-                  </div>
-                </div>
-              ))}
+              {Object.entries(byMember).map(([m, d]) => {
+                const txList = filteredTxs.filter((t) => t.type !== "transfer" && t.member === m);
+                return <MemberReportCard key={m} member={m} data={d} txList={txList} />;
+              })}
+            </div>
+          )}
+
+          {reportView === "ncc" && (
+            <div>
+              <p className="sans text-xs mb-2" style={{ color: COLORS.textSecondary }}>Chi tiêu theo NCC (bấm để xem chi tiết)</p>
+              {Object.entries(byVendor).sort((a, b) => b[1] - a[1]).map(([ven, amt]) => {
+                const max = Math.max(...Object.values(byVendor));
+                const txList = filteredTxs.filter((t) => t.type === "expense" && t.vendor === ven);
+                return <CategoryRow key={ven} label={ven} amount={amt} max={max} color={COLORS.expense} txList={txList} />;
+              })}
+              {Object.keys(byVendor).length === 0 && <p className="sans text-xs" style={{ color: COLORS.textMuted }}>Không có dữ liệu NCC trong khoảng ngày đã chọn.</p>}
             </div>
           )}
 
           {reportView === "tonghop" && (
             <div className="space-y-4">
-              {monthlyTotals.map(([key, d]) => (
-                <div key={key} className="rounded-lg p-3" style={{ background: COLORS.surface, border: "1px solid " + COLORS.border }}>
-                  <div className="flex items-center justify-between mb-2">
-                    <span className="sans text-sm" style={{ fontWeight: 600 }}>{monthLabel(key)}</span>
-                    <span className="mono text-sm" style={{ color: d.income - d.expense >= 0 ? COLORS.accent : COLORS.expense }}>
-                      {d.income - d.expense >= 0 ? "+" : ""}{fmtVND(d.income - d.expense)}
-                    </span>
-                  </div>
-                  <div className="flex justify-between sans text-xs">
-                    <span style={{ color: COLORS.accent }}>Thu: {fmtVND(d.income)}</span>
-                    <span style={{ color: COLORS.expense }}>Chi: {fmtVND(d.expense)}</span>
-                  </div>
-                </div>
-              ))}
+              {monthlyTotals.map(([key, d]) => {
+                const txList = filteredTxs.filter((t) => t.type !== "transfer" && monthKey(effDate(t)) === key);
+                return <MonthReportCard key={key} monthKeyStr={key} data={d} txList={txList} />;
+              })}
             </div>
           )}
         </div>
@@ -924,27 +1110,40 @@ async function addMember() {
             <MetricCard label="Tổng khoản nợ" value={liabilities} color={COLORS.expense} />
           </div>
           <div className="space-y-3">
-            {accounts.map((a) => (
-              <div key={a.id} className="rounded-lg p-3" style={{ background: COLORS.surface, border: "1px solid " + COLORS.border }}>
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-3">
-                    <AccIcon type={a.type} size={18} color={COLORS.cream} />
-                    <div>
-                      <p className="sans text-sm">{a.name}</p>
-                      <p className="sans text-xs" style={{ color: COLORS.textMuted }}>
-                        {ACCOUNT_TYPES.find((t) => t.value === a.type)?.label}
-                        {a.type === "credit" && ` · Chốt sao kê ${a.statementDay} · Hạn TT ${a.dueDay} tháng sau`}
-                      </p>
-                    </div>
+           {accounts.map((a) => (
+            <div key={a.id} className="rounded-lg p-3" style={{ background: COLORS.surface, border: "1px solid " + COLORS.border }}>
+              <div className="flex items-center justify-between" style={{ gap: 12 }}>
+                <div className="flex items-center gap-3" style={{ minWidth: 0, flex: 1 }}>
+                  <div style={{ flexShrink: 0 }}><AccIcon type={a.type} size={18} color={COLORS.cream} /></div>
+                  <div style={{ minWidth: 0 }}>
+                    <p className="sans text-sm" style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{a.name}</p>
+                    <p className="sans text-xs" style={{ color: COLORS.textMuted, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                      {ACCOUNT_TYPES.find((t) => t.value === a.type)?.label}
+                      {a.type === "credit" && ` · Chốt sao kê ${a.statementDay} · Hạn TT ${a.dueDay}${a.dueMonthOffset === 0 ? " (cùng tháng)" : " (tháng sau)"}`}
+                    </p>
                   </div>
+                </div>
+                <div className="flex items-center gap-3" style={{ flexShrink: 0 }}>
+                  <button onClick={() => startEditAccount(a)} style={{ color: COLORS.textMuted }}><Pencil size={14} /></button>
                   <button onClick={() => removeAccount(a.id)} style={{ color: COLORS.textMuted }}><Trash2 size={14} /></button>
                 </div>
-                <label className="sans text-xs flex items-center gap-2 mt-2" style={{ color: COLORS.textSecondary }}>
-                  <input type="checkbox" checked={a.includeNetWorth} onChange={() => toggleNetWorth(a.id)} style={{ width: "auto" }} />
-                  Tính vào tổng tài sản
-                </label>
               </div>
-            ))}
+
+              {a.type === "credit" ? (
+                <div className="flex justify-between sans text-xs mt-2">
+                  <span className="mono" style={{ color: COLORS.cream }}>Khả dụng: {fmtVND((a.creditLimit || 0) - Math.max(0, -(balances[a.id] || 0)))}</span>
+                  <span style={{ color: COLORS.expense }}>Dư nợ: {fmtVND(Math.max(0, -(balances[a.id] || 0)))}</span>
+                </div>
+              ) : (
+                <p className="mono text-sm mt-2" style={{ color: COLORS.cream, textAlign: "right" }}>Số dư: {fmtVND(balances[a.id] || 0)}</p>
+              )}
+
+              <label className="sans text-xs flex items-center gap-2 mt-2" style={{ color: COLORS.textSecondary }}>
+                <input type="checkbox" checked={a.includeNetWorth} onChange={() => toggleNetWorth(a.id)} style={{ width: "auto" }} />
+                Tính vào tổng tài sản
+              </label>
+            </div>
+          ))}
           </div>
           <p className="sans text-xs" style={{ color: COLORS.textMuted }}>Cần thêm tài khoản mới? Vào tab Cài đặt.</p>
         </div>
@@ -990,24 +1189,42 @@ async function addMember() {
             </div>
           </Section>
 
-          <Section title="Thêm tài khoản mới">
+          <Section title="Thêm tài khoản mới" id="add-account-section">
             <div className="space-y-2">
               <input placeholder="Tên tài khoản" value={newAcc.name} onChange={(e) => setNewAcc({ ...newAcc, name: e.target.value })} />
               <select value={newAcc.type} onChange={(e) => setNewAcc({ ...newAcc, type: e.target.value })}>
                 {ACCOUNT_TYPES.map((t) => <option key={t.value} value={t.value}>{t.label}</option>)}
               </select>
-              {newAcc.type === "credit" && (
-                <div className="flex gap-2">
-                  <div className="flex-1"><label className="lbl">Ngày chốt sao kê</label><input type="number" min="1" max="31" value={newAcc.statementDay} onChange={(e) => setNewAcc({ ...newAcc, statementDay: e.target.value })} /></div>
-                  <div className="flex-1"><label className="lbl">Hạn TT tháng sau</label><input type="number" min="1" max="31" value={newAcc.dueDay} onChange={(e) => setNewAcc({ ...newAcc, dueDay: e.target.value })} /></div>
-                </div>
+             {newAcc.type === "credit" && (
+                <>
+                  <div className="flex gap-2">
+                    <div className="flex-1"><label className="lbl">Ngày chốt sao kê</label><input type="number" min="1" max="31" value={newAcc.statementDay} onChange={(e) => setNewAcc({ ...newAcc, statementDay: e.target.value })} /></div>
+                    <div className="flex-1"><label className="lbl">Ngày hạn TT</label><input type="number" min="1" max="31" value={newAcc.dueDay} onChange={(e) => setNewAcc({ ...newAcc, dueDay: e.target.value })} /></div>
+                  </div>
+                  <div>
+                    <label className="lbl">Hạn thanh toán rơi vào</label>
+                    <select value={newAcc.dueMonthOffset} onChange={(e) => setNewAcc({ ...newAcc, dueMonthOffset: Number(e.target.value) })}>
+                      <option value={0}>Cùng tháng chốt sao kê</option>
+                      <option value={1}>Tháng sau (mặc định)</option>
+                    </select>
+                  </div>
+                  <div><label className="lbl">Hạn mức tín dụng</label><AmountInput value={newAcc.creditLimit} onChange={(v) => setNewAcc({ ...newAcc, creditLimit: v })} /></div>
+                </>
               )}
+
               <label className="sans text-xs flex items-center gap-2" style={{ color: COLORS.textSecondary }}>
                 <input type="checkbox" checked={newAcc.includeNetWorth} onChange={(e) => setNewAcc({ ...newAcc, includeNetWorth: e.target.checked })} style={{ width: "auto" }} />
                 Tính vào tổng tài sản
               </label>
               <div><label className="lbl">Số dư đầu kỳ</label><AmountInput value={newAcc.openingBalance} onChange={(v) => setNewAcc({ ...newAcc, openingBalance: v })} /></div>
-              <button onClick={addAccount} className="w-full py-2.5 rounded-md sans text-sm" style={{ border: "1px solid " + COLORS.cream, color: COLORS.cream }}>+ Thêm tài khoản</button>
+              <button onClick={saveAccount} className="w-full py-2.5 rounded-md sans text-sm" style={{ border: "1px solid " + COLORS.cream, color: COLORS.cream }}>
+                  {editingAccId ? "Cập nhật tài khoản" : "+ Thêm tài khoản"}
+                </button>
+                {editingAccId && (
+                  <button onClick={() => { setEditingAccId(null); setNewAcc({ name: "", type: "debit", statementDay: 15, dueDay: 5, includeNetWorth: true, openingBalance: "", creditLimit: "" }); }} className="w-full py-2 rounded-md sans text-xs" style={{ border: "1px solid " + COLORS.border, color: COLORS.textMuted }}>
+                  Hủy sửa
+                </button>
+                )}
             </div>
           </Section>
 
@@ -1024,7 +1241,15 @@ async function addMember() {
           <Section title="Thêm khoản định kỳ">
             <div className="space-y-2">
               <input placeholder="Tên khoản định kỳ (VD: Trả góp xe)" value={newRecurring.name} onChange={(e) => setNewRecurring({ ...newRecurring, name: e.target.value })} />
-              <div style={{ width: "100%" }}><AmountInput value={newRecurring.amount} onChange={(v) => setNewRecurring({ ...newRecurring, amount: v })} placeholder="Số tiền mỗi lần" /></div>
+              <label className="sans text-xs flex items-center gap-2" style={{ color: COLORS.textSecondary }}>
+                  <input type="checkbox" checked={newRecurring.isInstallment} onChange={(e) => setNewRecurring({ ...newRecurring, isInstallment: e.target.checked })} style={{ width: "auto" }} />
+                  Khoản trả góp (tự tính số tiền mỗi kỳ theo nguyên giá)
+                </label>
+                {newRecurring.isInstallment ? (
+                  <div><label className="lbl">Nguyên giá</label><AmountInput value={newRecurring.principal} onChange={(v) => setNewRecurring({ ...newRecurring, principal: v })} /></div>
+                ) : (
+                  <div style={{ width: "100%" }}><AmountInput value={newRecurring.amount} onChange={(v) => setNewRecurring({ ...newRecurring, amount: v })} placeholder="Số tiền mỗi lần" /></div>
+                )}
               <div className="flex gap-2">
                 <select value={newRecurring.category} onChange={(e) => setNewRecurring({ ...newRecurring, category: e.target.value })}>
                   {expenseCats.map((c) => <option key={c} value={c}>{c}</option>)}
@@ -1042,12 +1267,27 @@ async function addMember() {
                   </select>
                 </div>
                 <div style={{ width: 110 }}><label className="lbl">Số chu kỳ</label><input type="number" min="0" placeholder="0 = mãi" value={newRecurring.cycleCount} onChange={(e) => setNewRecurring({ ...newRecurring, cycleCount: e.target.value })} /></div>
+                {newRecurring.isInstallment && newRecurring.principal && Number(newRecurring.cycleCount) > 0 && (
+                  <p className="sans text-xs" style={{ color: COLORS.textSecondary }}>
+                    → Mỗi kỳ: {fmtVND(Number(newRecurring.principal) / Number(newRecurring.cycleCount))}
+                  </p>
+                )}
               </div>
               <button onClick={addRecurring} className="w-full py-2.5 rounded-md sans text-sm" style={{ border: "1px solid " + COLORS.cream, color: COLORS.cream }}>+ Thêm khoản định kỳ</button>
             </div>
           </Section>
         </div>
       )}
+
+        {toast && (
+          <div className="sans" style={{
+            position: "fixed", bottom: 80, left: "50%", transform: "translateX(-50%)",
+            background: COLORS.cream, color: COLORS.bg, padding: "8px 16px", borderRadius: 999,
+            fontSize: 12, fontWeight: 600, zIndex: 50, boxShadow: "0 4px 12px rgba(0,0,0,0.3)",
+          }}>
+            {toast}
+          </div>
+        )}
 
       <div className="fixed bottom-0 left-0 right-0 flex" style={{ background: COLORS.surface, borderTop: "1px solid " + COLORS.border }}>
         {[
