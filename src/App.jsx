@@ -2,7 +2,7 @@ import React, { useState, useMemo } from "react";
 import {
   Plus, Wallet, CreditCard, Banknote, TrendingDown, TrendingUp, Trash2,
   ArrowRight, ArrowRightLeft, ArrowDownCircle, Landmark, PiggyBank, Repeat,
-  Settings, Users, BarChart3, PieChart as PieChartIcon, X,Pencil,
+  Settings, Users, BarChart3, PieChart as PieChartIcon, X,Pencil,Search,
 } from "lucide-react";
 import { PieChart, Pie, Cell, Tooltip, Legend, ResponsiveContainer } from "recharts";
 import { useEffect } from "react";
@@ -331,6 +331,9 @@ export default function App() {
   const [budgets, setBudgets] = useState([]);
   const [editingId, setEditingId] = useState(null);
   const [editingAccId, setEditingAccId] = useState(null);
+  const [detailTx, setDetailTx] = useState(null);
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
   const [toast, setToast] = useState("");
   const [newAcc, setNewAcc] = useState({ name: "", type: "debit", statementDay: 15, dueDay: 5, dueMonthOffset: 1, includeNetWorth: true, openingBalance: "", creditLimit: "" });
 
@@ -704,7 +707,14 @@ function startEditAccount(a) {
   const periodTxs = useMemo(() => txs.filter((t) => t.type !== "transfer" && inPeriod(t.date, txPeriod)), [txs, txPeriod]);
   const periodIncome = periodTxs.filter((t) => t.type === "income").reduce((s, t) => s + t.amount, 0);
   const periodExpense = periodTxs.filter((t) => t.type === "expense").reduce((s, t) => s + t.amount, 0);
-  const recentList = useMemo(() => txs.filter((t) => inPeriod(t.date, txPeriod)), [txs, txPeriod]);
+  const recentList = useMemo(() => {
+  const q = searchQuery.trim().toLowerCase();
+    return txs.filter((t) => {
+      if (!inPeriod(t.date, txPeriod)) return false;
+      if (!q) return true;
+      return [t.note, t.category, t.vendor, t.member].some((f) => (f || "").toLowerCase().includes(q));
+    });
+  }, [txs, txPeriod, searchQuery]);
 
   const inputStyle = `
   * { box-sizing: border-box; }
@@ -869,11 +879,29 @@ function startEditAccount(a) {
 
          <div className="pt-2">
             <div style={{ position: "sticky", top: 0, zIndex: 10, background: COLORS.bg, paddingTop: 8, paddingBottom: 8, marginBottom: 4 }}>
-              <div className="flex gap-2 mb-3">
+              <div className="flex items-center justify-between gap-2 mb-3">
+              <div className="flex gap-2" style={{ overflowX: "auto" }}>
                 {[{ v: "today", l: "Hôm nay" }, { v: "week", l: "Tuần này" }, { v: "month", l: "Tháng này" }, { v: "all", l: "Tất cả" }].map((o) => (
                   <Chip key={o.v} label={o.l} active={txPeriod === o.v} onClick={() => setTxPeriod(o.v)} />
                 ))}
               </div>
+              <button
+                onClick={() => { setSearchOpen(!searchOpen); if (searchOpen) setSearchQuery(""); }}
+                style={{ color: searchOpen ? COLORS.cream : COLORS.textMuted, flexShrink: 0 }}
+              >
+                <Search size={18} />
+              </button>
+            </div>
+
+            {searchOpen && (
+              <input
+                autoFocus
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder="Tìm theo ghi chú, danh mục, NCC, thành viên..."
+                className="mb-3"
+              />
+            )}
               <div className="flex gap-3">
                 <MetricCard label="Tổng thu" value={periodIncome} color={COLORS.accent} />
                 <MetricCard label="Tổng chi" value={periodExpense} color={COLORS.expense} />
@@ -885,7 +913,7 @@ function startEditAccount(a) {
             const color = t.type === "income" ? COLORS.accent : t.type === "transfer" ? COLORS.transfer : COLORS.expense;
             const sign = t.type === "income" ? "+" : t.type === "transfer" ? "" : "-";
             return (
-              <div key={t.id} className="ledger-line py-3 flex items-center justify-between" style={{ gap: 12 }}>
+              <div key={t.id} className="ledger-line py-3 flex items-center justify-between" style={{ gap: 12, cursor: "pointer" }} onClick={() => setDetailTx(t)}>
                 <div className="flex items-center gap-3" style={{ minWidth: 0, flex: 1 }}>
                   <div style={{ color: COLORS.textMuted, flexShrink: 0 }}><AccIcon type={acc?.type} /></div>
                   <div style={{ minWidth: 0 }}>
@@ -900,8 +928,8 @@ function startEditAccount(a) {
                 <div className="flex flex-col items-end gap-1" style={{ flexShrink: 0 }}>
                   <span className="mono text-sm" style={{ color }}>{sign}{fmtVND(t.amount)}</span>
                   <div className="flex items-center gap-3">
-                    <button onClick={() => startEditTx(t)} style={{ color: COLORS.textMuted }}><Pencil size={14} /></button>
-                    <button onClick={() => removeTx(t.id)} style={{ color: COLORS.textMuted }}><Trash2 size={14} /></button>
+                    <button onClick={(e) => { e.stopPropagation(); startEditTx(t); }} style={{ color: COLORS.textMuted }}><Pencil size={14} /></button>
+                    <button onClick={(e) => { e.stopPropagation(); removeTx(t.id); }} style={{ color: COLORS.textMuted }}><Trash2 size={14} /></button>
                   </div>
                 </div>
               </div>
@@ -971,10 +999,25 @@ function startEditAccount(a) {
                   <div style={{ height: 240 }}>
                     <ResponsiveContainer width="100%" height="100%">
                       <PieChart>
-                        <Pie data={pieExpense} dataKey="value" nameKey="name" innerRadius={50} outerRadius={80} paddingAngle={2}>
+                        <Pie
+                          data={pieExpense}
+                          dataKey="value"
+                          nameKey="name"
+                          innerRadius={50}
+                          outerRadius={80}
+                          paddingAngle={2}
+                          label={({ percent }) => `${(percent * 100).toFixed(0)}%`}
+                          labelLine={false}
+                        >
                           {pieExpense.map((_, i) => <Cell key={i} fill={PIE_COLORS[i % PIE_COLORS.length]} />)}
                         </Pie>
-                        <Tooltip formatter={(v) => fmtVND(v)} contentStyle={{ background: COLORS.surface, border: "1px solid " + COLORS.border, fontSize: 12 }} />
+                        <Tooltip
+                          formatter={(v, n, props) => {
+                            const total = pieExpense.reduce((s, d) => s + d.value, 0);
+                            return [`${fmtVND(v)} (${((v / total) * 100).toFixed(1)}%)`, n];
+                          }}
+                          contentStyle={{ background: COLORS.surface, border: "1px solid " + COLORS.border, fontSize: 12 }}
+                        />
                         <Legend wrapperStyle={{ fontSize: 11, color: COLORS.textSecondary }} />
                       </PieChart>
                     </ResponsiveContainer>
@@ -987,10 +1030,25 @@ function startEditAccount(a) {
                   <div style={{ height: 240 }}>
                     <ResponsiveContainer width="100%" height="100%">
                       <PieChart>
-                        <Pie data={pieIncome} dataKey="value" nameKey="name" innerRadius={50} outerRadius={80} paddingAngle={2}>
+                        <Pie
+                          data={pieIncome}
+                          dataKey="value"
+                          nameKey="name"
+                          innerRadius={50}
+                          outerRadius={80}
+                          paddingAngle={2}
+                          label={({ percent }) => `${(percent * 100).toFixed(0)}%`}
+                          labelLine={false}
+                        >
                           {pieIncome.map((_, i) => <Cell key={i} fill={PIE_COLORS[i % PIE_COLORS.length]} />)}
                         </Pie>
-                        <Tooltip formatter={(v) => fmtVND(v)} contentStyle={{ background: COLORS.surface, border: "1px solid " + COLORS.border, fontSize: 12 }} />
+                        <Tooltip
+                          formatter={(v, n, props) => {
+                            const total = pieExpense.reduce((s, d) => s + d.value, 0);
+                            return [`${fmtVND(v)} (${((v / total) * 100).toFixed(1)}%)`, n];
+                          }}
+                          contentStyle={{ background: COLORS.surface, border: "1px solid " + COLORS.border, fontSize: 12 }}
+                        />
                         <Legend wrapperStyle={{ fontSize: 11, color: COLORS.textSecondary }} />
                       </PieChart>
                     </ResponsiveContainer>
@@ -1278,6 +1336,47 @@ function startEditAccount(a) {
           </Section>
         </div>
       )}
+
+        {detailTx && (() => {
+          const acc = accById(detailTx.accountId);
+          const toAcc = accById(detailTx.toAccountId);
+          const color = detailTx.type === "income" ? COLORS.accent : detailTx.type === "transfer" ? COLORS.transfer : COLORS.expense;
+          const sign = detailTx.type === "income" ? "+" : detailTx.type === "transfer" ? "" : "-";
+          return (
+            <div onClick={() => setDetailTx(null)} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.6)", zIndex: 40, display: "flex", alignItems: "flex-end", justifyContent: "center" }}>
+              <div onClick={(e) => e.stopPropagation()} className="rounded-t-2xl p-5 w-full" style={{ maxWidth: 480, background: COLORS.surface, border: "1px solid " + COLORS.border }}>
+                <div className="flex items-center justify-between mb-4">
+                  <p className="sans text-sm" style={{ color: COLORS.textSecondary }}>Chi tiết giao dịch</p>
+                  <button onClick={() => setDetailTx(null)} style={{ color: COLORS.textMuted }}><X size={18} /></button>
+                </div>
+                <p className="mono text-2xl mb-4" style={{ color }}>{sign}{fmtVND(detailTx.amount)}</p>
+                <div className="space-y-2 sans text-sm">
+                  <div className="flex justify-between"><span style={{ color: COLORS.textMuted }}>Ngày</span><span>{fmtDate(detailTx.date)}</span></div>
+                  <div className="flex justify-between"><span style={{ color: COLORS.textMuted }}>Loại</span><span>{detailTx.type === "income" ? "Thu" : detailTx.type === "expense" ? "Chi" : "Chuyển khoản"}</span></div>
+                  {detailTx.type === "transfer" ? (
+                    <div className="flex justify-between"><span style={{ color: COLORS.textMuted }}>Từ / Đến</span><span>{acc?.name} → {toAcc?.name}</span></div>
+                  ) : (
+                    <>
+                      <div className="flex justify-between"><span style={{ color: COLORS.textMuted }}>Danh mục</span><span>{detailTx.category || "—"}</span></div>
+                      <div className="flex justify-between"><span style={{ color: COLORS.textMuted }}>Tài khoản</span><span>{acc?.name}</span></div>
+                      {detailTx.vendor && <div className="flex justify-between"><span style={{ color: COLORS.textMuted }}>NCC</span><span>{detailTx.vendor}</span></div>}
+                      {detailTx.member && <div className="flex justify-between"><span style={{ color: COLORS.textMuted }}>Thành viên</span><span>{detailTx.member}</span></div>}
+                    </>
+                  )}
+                  {detailTx.note && <div className="flex justify-between"><span style={{ color: COLORS.textMuted }}>Ghi chú</span><span style={{ textAlign: "right", maxWidth: "60%" }}>{detailTx.note}</span></div>}
+                </div>
+                <div className="flex gap-2 mt-5">
+                  <button onClick={() => { setDetailTx(null); startEditTx(detailTx); }} className="flex-1 py-2.5 rounded-md sans text-sm flex items-center justify-center gap-2" style={{ border: "1px solid " + COLORS.cream, color: COLORS.cream }}>
+                    <Pencil size={14} /> Sửa
+                  </button>
+                  <button onClick={() => { setDetailTx(null); removeTx(detailTx.id); }} className="flex-1 py-2.5 rounded-md sans text-sm flex items-center justify-center gap-2" style={{ border: "1px solid " + COLORS.expense, color: COLORS.expense }}>
+                    <Trash2 size={14} /> Xóa
+                  </button>
+                </div>
+              </div>
+            </div>
+          );
+        })()}
 
         {toast && (
           <div className="sans" style={{
