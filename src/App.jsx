@@ -1,11 +1,10 @@
-import React, { useState, useMemo } from "react";
+import React, { useState, useMemo, useEffect, useRef } from "react";
 import {
   Plus, Wallet, CreditCard, Banknote, TrendingDown, TrendingUp, Trash2,
   ArrowRight, ArrowRightLeft, ArrowDownCircle, Landmark, PiggyBank, Repeat,
   Settings, Users, BarChart3, PieChart as PieChartIcon, X,Pencil,Search,
 } from "lucide-react";
 import { PieChart, Pie, Cell, Tooltip, Legend, ResponsiveContainer } from "recharts";
-import { useEffect } from "react";
 import { supabase } from "./supabaseClient";
 import Login from "./Login";
 
@@ -42,8 +41,10 @@ function txFromDb(row) {
     toAccountId: row.to_account_id,
     vendor: row.vendor,
     note: row.note,
+    recurringId: row.recurring_id,       // ← thêm dòng này
   };
 }
+
 function txToDb(t) {
   return {
     type: t.type,
@@ -55,6 +56,7 @@ function txToDb(t) {
     to_account_id: t.toAccountId || null,
     vendor: t.vendor || null,
     note: t.note || null,
+    recurring_id: t.recurringId || null,  // ← thêm dòng này
   };
 }
 
@@ -72,6 +74,7 @@ function recFromDb(row) {
     doneCount: row.done_count || 0,
     principal: row.principal || 0,
     isInstallment: row.is_installment || false,
+    isActive: row.is_active ?? true,        // ← thêm dòng này
   };
 }
 function recToDb(r) {
@@ -86,6 +89,7 @@ function recToDb(r) {
     cycle_count: r.cycleCount ? Number(r.cycleCount) : null,
     principal: r.principal ? Number(r.principal) : null,
     is_installment: r.isInstallment || false,
+    is_active: r.isActive ?? true,           // ← thêm dòng này
   };
 }
 
@@ -163,14 +167,35 @@ function getCashFlowDate(tx, account) {
   return new Date(txDate.getFullYear(), dueMonth, account.dueDay);
 }
 
-function nextDueDate(r) {
+function occurrenceDate(r, account, n) {
+  if (account && account.type === "credit" && r.repeatUnit === "month") {
+    const start = new Date(r.startDate + "T00:00:00");
+    const day = Math.max(1, (account.statementDay || 1) - 1);
+    // Nếu ngày phát sinh đã qua mốc (statementDay-1) của tháng đó -> kỳ đầu tiên rơi vào tháng sau
+    const anchorMonthOffset = start.getDate() > day ? 1 : 0;
+    return new Date(start.getFullYear(), start.getMonth() + anchorMonthOffset + n * r.repeatValue, day);
+  }
   const d = new Date(r.startDate + "T00:00:00");
-  const n = r.doneCount;
   if (r.repeatUnit === "year") d.setFullYear(d.getFullYear() + n * r.repeatValue);
   else if (r.repeatUnit === "week") d.setDate(d.getDate() + n * r.repeatValue * 7);
   else if (r.repeatUnit === "day") d.setDate(d.getDate() + n * r.repeatValue);
   else d.setMonth(d.getMonth() + n * r.repeatValue);
   return d;
+}
+
+function nextDueDate(r, account) {
+  return occurrenceDate(r, account, r.doneCount);
+}
+
+function dueCountUpTo(r, account, today) {
+  let n = r.doneCount;
+  while (
+    (r.cycleCount === 0 || n < r.cycleCount) &&
+    occurrenceDate(r, account, n) <= today
+  ) {
+    n++;
+  }
+  return n; // số lần "đáng lẽ đã ghi nhận" tính đến hôm nay
 }
 
 function inPeriod(dateStr, period) {
@@ -257,6 +282,65 @@ function MetricCard({ label, value, color }) {
       </div>
     );
   }
+
+function RecurringItemCard({ r, acc, done, pending, txList, unitLabel, onEdit, onRemove, onToggleActive, onLog, onEditTx }) {
+  const [open, setOpen] = useState(false);
+  const inactive = r.isActive === false;
+  return (
+    <div className="rounded-lg p-3" style={{
+      background: COLORS.surface,
+      border: "1px solid " + (pending ? COLORS.expense : COLORS.border),
+      opacity: inactive ? 0.55 : 1,
+    }}>
+      <div className="flex items-center justify-between" style={{ cursor: "pointer" }} onClick={() => setOpen(!open)}>
+        <div className="flex items-center gap-2">
+          <Repeat size={15} style={{ color: COLORS.cream }} />
+          <div>
+            <p className="sans text-sm">
+              {r.name}
+              {inactive && <span style={{ color: COLORS.textMuted, fontSize: 11 }}> · Đã tạm dừng</span>}
+              {!inactive && pending && <span style={{ color: COLORS.expense, fontSize: 11 }}> · Đến hạn</span>}
+            </p>
+            <p className="sans text-xs" style={{ color: COLORS.textMuted }}>
+              {r.category} · mỗi {r.repeatValue} {unitLabel(r.repeatUnit)}/lần · từ {fmtDate(r.startDate)} · {r.cycleCount > 0 ? `${r.doneCount}/${r.cycleCount} chu kỳ` : `đã ghi ${r.doneCount} lần, không giới hạn`}
+            </p>
+          </div>
+        </div>
+        <div className="flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
+          <button onClick={() => onEdit(r)} style={{ color: COLORS.textMuted }}><Pencil size={13} /></button>
+          <button onClick={() => onToggleActive(r)} className="sans text-xs px-2 py-1 rounded"
+            style={{ border: "1px solid " + COLORS.border, color: COLORS.textSecondary }}>
+            {inactive ? "Kích hoạt lại" : "Tạm dừng"}
+          </button>
+          <button onClick={() => onRemove(r.id)} style={{ color: COLORS.textMuted }}><Trash2 size={13} /></button>
+        </div>
+      </div>
+
+      <div className="flex items-center justify-between mt-2">
+        <span className="mono text-xs">{fmtVND(r.amount)} · {acc?.name}</span>
+        <button onClick={(e) => { e.stopPropagation(); onLog(r); }} disabled={done || inactive} className="sans text-xs px-2 py-1 rounded"
+          style={{ border: "1px solid " + (done || inactive ? COLORS.textMuted : COLORS.accent), color: done || inactive ? COLORS.textMuted : COLORS.accent }}>
+          {done ? "Đã hoàn thành" : "Ghi nhận"}
+        </button>
+      </div>
+
+      {open && (
+        <div className="mt-2 pt-2 space-y-1" style={{ borderTop: "1px dashed " + COLORS.border }}>
+          {txList.length === 0 && <p className="sans text-xs" style={{ color: COLORS.textMuted }}>Chưa có giao dịch nào được ghi nhận.</p>}
+          {txList.map((t) => (
+            <div key={t.id} className="flex items-center justify-between sans text-xs" style={{ color: COLORS.textMuted }}>
+              <span>{fmtDate(t.date)} · {t.category}</span>
+              <div className="flex items-center gap-2">
+                <span className="mono" style={{ color: COLORS.textSecondary }}>{fmtVND(t.amount)}</span>
+                <button onClick={() => onEditTx(t)} style={{ color: COLORS.textMuted }}><Pencil size={12} /></button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
 
 function AccountReportCard({ account, data, balance, txList }) {
   const [open, setOpen] = useState(false);
@@ -398,14 +482,6 @@ useEffect(() => {
   return () => subscription.unsubscribe();
 }, []);
 
-// Tự set ngày ghi nhận = ngày sao kê - 1 nếu chọn tài khoản tín dụng
-useEffect(() => {
-  const acc = accById(newRecurring.accountId);
-  if (acc && acc.type === "credit") {
-    setNewRecurring((r) => ({ ...r, startDate: creditInstallmentDefaultDate(acc) }));
-  }
-}, [newRecurring.accountId]);
-
 // Tự tính số tiền mỗi kỳ = nguyên giá / số chu kỳ
 useEffect(() => {
   if (newRecurring.isInstallment && newRecurring.principal && Number(newRecurring.cycleCount) > 0) {
@@ -413,6 +489,36 @@ useEffect(() => {
     setNewRecurring((r) => ({ ...r, amount: String(per) }));
   }
 }, [newRecurring.isInstallment, newRecurring.principal, newRecurring.cycleCount]);
+
+const autoRecurringRanRef = useRef(false);
+
+useEffect(() => {
+  if (loadingData || autoRecurringRanRef.current) return;
+  if (recurring.length === 0 || accounts.length === 0) return;
+  autoRecurringRanRef.current = true; // chỉ chạy 1 lần/phiên
+
+  (async () => {
+    const today = new Date(); today.setHours(0, 0, 0, 0);
+    let loggedCount = 0;
+
+    for (const r of recurring) {
+      if (r.isActive === false) continue; 
+      const acc = accounts.find((a) => a.id === r.accountId);
+      const expected = dueCountUpTo(r, acc, today);
+      let done = r.doneCount;
+
+      while (done < expected) {
+        const occDate = occurrenceDate(r, acc, done);
+        const iso = `${occDate.getFullYear()}-${pad(occDate.getMonth() + 1)}-${pad(occDate.getDate())}`;
+        const ok = await logRecurring(r, iso, done);   // truyền rõ occurrenceIndex = done
+        if (!ok) break;
+        done++;
+        loggedCount++;
+      }
+    }
+    if (loggedCount > 0) showToast(`Đã tự động ghi nhận ${loggedCount} khoản định kỳ`);
+  })();
+}, [loadingData, recurring, accounts]);
 
 useEffect(() => {
   if (!session) return;
@@ -647,18 +753,42 @@ function startEditRecurring(r) {
   showToast("Đã xóa khoản định kỳ");
   }
 
- async function logRecurring(r) {
-  if (r.cycleCount > 0 && r.doneCount >= r.cycleCount) return;
-  const payload = txToDb({ type: "expense", date: todayISO(), amount: r.amount, category: r.category, member: members[0], accountId: r.accountId, note: r.name + " (định kỳ)" });
-  const { data, error } = await supabase.from("transactions").insert(payload).select().single();
-  if (error) { console.error(error); return; }
-  setTxs([txFromDb(data), ...txs]);
-  showToast("Đã ghi nhận");
+async function toggleRecurringActive(r) {
+  const { error } = await supabase.from("recurring_items").update({ is_active: !r.isActive }).eq("id", r.id);
+  if (error) { console.error(error); showToast("Không cập nhật được"); return; }
+  setRecurring((prev) => prev.map((x) => x.id === r.id ? { ...x, isActive: !x.isActive } : x));
+  showToast(r.isActive ? "Đã tạm dừng khoản định kỳ" : "Đã kích hoạt lại");
+}
 
-  const { error: err2 } = await supabase.from("recurring_items").update({ done_count: r.doneCount + 1 }).eq("id", r.id);
-  if (err2) { console.error(err2); return; }
-  setRecurring(recurring.map((x) => x.id === r.id ? { ...x, doneCount: x.doneCount + 1 } : x));
+  async function logRecurring(r, dateOverride, occurrenceIndexOverride) {
+  if (r.cycleCount > 0 && r.doneCount >= r.cycleCount) return false;
+  const date = dateOverride || todayISO();
+  const occurrenceIndex = occurrenceIndexOverride ?? r.doneCount;
+
+  const { data, error } = await supabase.rpc("log_recurring_occurrence", {
+    p_recurring_id: r.id,
+    p_occurrence_index: occurrenceIndex,
+    p_date: date,
+    p_amount: r.amount,
+    p_category: r.category,
+    p_member: members[0] || null,
+    p_account_id: r.accountId,
+    p_note: r.name + " (định kỳ)",
+  });
+
+  if (error) {
+    if (error.message?.includes("STALE_DONE_COUNT") || error.code === "23505") {
+      // Kỳ này đã được ghi nhận từ lần chạy khác rồi — không phải lỗi thật
+      return true;
+    }
+    console.error(error);
+    return false;
   }
+
+  setTxs((prev) => [txFromDb(data), ...prev]);
+  setRecurring((prev) => prev.map((x) => x.id === r.id ? { ...x, doneCount: occurrenceIndex + 1 } : x));
+  return true;
+}
 
   async function saveBudget() {
     if (!newBudget.limit) return;
@@ -697,6 +827,7 @@ function startEditRecurring(r) {
   const upcomingByUnit = useMemo(() => {
     const g = { week: 0, month: 0, year: 0 };
     recurring.forEach((r) => {
+      if (r.isActive === false) return;                                  // ← thêm
       const done = r.cycleCount > 0 && r.doneCount >= r.cycleCount;
       if (!done && g[r.repeatUnit] !== undefined) g[r.repeatUnit] += r.amount;
     });
@@ -706,10 +837,12 @@ function startEditRecurring(r) {
   const pendingRecurring = useMemo(() => {
     const now = new Date(); now.setHours(0, 0, 0, 0);
     return recurring.filter((r) => {
+      if (r.isActive === false) return false;                            // ← thêm
       const done = r.cycleCount > 0 && r.doneCount >= r.cycleCount;
-      return !done && nextDueDate(r) <= now;
+      const acc = accById(r.accountId);
+      return !done && nextDueDate(r, acc) <= now;
     });
-  }, [recurring]);
+  }, [recurring, accounts]);
 
   const installmentReserved = useMemo(() => {
     const g = {};
@@ -1001,7 +1134,7 @@ function startEditRecurring(r) {
               <div>
                 <p className="sans text-xs mb-1" style={{ color: COLORS.textSecondary }}>Tỷ trọng chi tiêu</p>
                 {pieExpense.length > 0 ? (
-                  <div style={{ height: 240 }}>
+                  <div style={{ height: 260 }}>
                     <ResponsiveContainer width="100%" height="100%">
                       <PieChart>
                         <Pie
@@ -1011,7 +1144,17 @@ function startEditRecurring(r) {
                           innerRadius={50}
                           outerRadius={80}
                           paddingAngle={2}
-                          label={({ percent }) => `${(percent * 100).toFixed(0)}%`}
+                          label={({ cx, cy, midAngle, innerRadius, outerRadius, percent, index }) => {
+                            const RADIAN = Math.PI / 180;
+                            const radius = innerRadius + (outerRadius - innerRadius) * 1.3;
+                            const x = cx + radius * Math.cos(-midAngle * RADIAN);
+                            const y = cy + radius * Math.sin(-midAngle * RADIAN);
+                            return (
+                              <text x={x} y={y} fill={PIE_COLORS[index % PIE_COLORS.length]} textAnchor={x > cx ? "start" : "end"} dominantBaseline="central" fontSize={12}>
+                                {`${(percent * 100).toFixed(0)}%`}
+                              </text>
+                            );
+                          }}
                           labelLine={false}
                         >
                           {pieExpense.map((_, i) => <Cell key={i} fill={PIE_COLORS[i % PIE_COLORS.length]} />)}
@@ -1032,17 +1175,27 @@ function startEditRecurring(r) {
               <div>
                 <p className="sans text-xs mb-1" style={{ color: COLORS.textSecondary }}>Tỷ trọng thu nhập</p>
                 {pieIncome.length > 0 ? (
-                  <div style={{ height: 240 }}>
+                  <div style={{ height: 260 }}>
                     <ResponsiveContainer width="100%" height="100%">
                       <PieChart>
-                        <Pie
+                                 <Pie
                           data={pieIncome}
                           dataKey="value"
                           nameKey="name"
                           innerRadius={50}
                           outerRadius={80}
                           paddingAngle={2}
-                          label={({ percent }) => `${(percent * 100).toFixed(0)}%`}
+                          label={({ cx, cy, midAngle, innerRadius, outerRadius, percent, index }) => {
+                            const RADIAN = Math.PI / 180;
+                            const radius = innerRadius + (outerRadius - innerRadius) * 1.3;
+                            const x = cx + radius * Math.cos(-midAngle * RADIAN);
+                            const y = cy + radius * Math.sin(-midAngle * RADIAN);
+                            return (
+                              <text x={x} y={y} fill={PIE_COLORS[index % PIE_COLORS.length]} textAnchor={x > cx ? "start" : "end"} dominantBaseline="central" fontSize={12}>
+                                {`${(percent * 100).toFixed(0)}%`}
+                              </text>
+                            );
+                          }}
                           labelLine={false}
                         >
                           {pieIncome.map((_, i) => <Cell key={i} fill={PIE_COLORS[i % PIE_COLORS.length]} />)}
@@ -1150,32 +1303,19 @@ function startEditRecurring(r) {
             <div className="space-y-2">
               {recurring.map((r) => {
                 const done = r.cycleCount > 0 && r.doneCount >= r.cycleCount;
-                const pending = !done && nextDueDate(r) <= new Date();
+                const acc = accById(r.accountId);
+                const pending = !done && nextDueDate(r, acc) <= new Date();
+                const txList = txs.filter((t) => t.recurringId === r.id).sort((a, b) => (a.date < b.date ? 1 : -1));
                 return (
-                  <div key={r.id} className="rounded-lg p-3" style={{ background: COLORS.surface, border: "1px solid " + (pending ? COLORS.expense : COLORS.border) }}>
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-2">
-                        <Repeat size={15} style={{ color: COLORS.cream }} />
-                        <div>
-                          <p className="sans text-sm">{r.name} {pending && <span style={{ color: COLORS.expense, fontSize: 11 }}>· Đến hạn</span>}</p>
-                          <p className="sans text-xs" style={{ color: COLORS.textMuted }}>
-                            {r.category} · mỗi {r.repeatValue} {unitLabel(r.repeatUnit)}/lần · từ {fmtDate(r.startDate)} · {r.cycleCount > 0 ? `${r.doneCount}/${r.cycleCount} chu kỳ` : `đã ghi ${r.doneCount} lần, không giới hạn`}
-                          </p>
-                        </div>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <button onClick={() => startEditRecurring(r)} style={{ color: COLORS.textMuted }}><Pencil size={13} /></button>
-                        <button onClick={() => removeRecurring(r.id)} style={{ color: COLORS.textMuted }}><Trash2 size={13} /></button>
-                      </div>
-                    </div>
-                    <div className="flex items-center justify-between mt-2">
-                      <span className="mono text-xs">{fmtVND(r.amount)} · {accById(r.accountId)?.name}</span>
-                      <button onClick={() => logRecurring(r)} disabled={done} className="sans text-xs px-2 py-1 rounded"
-                        style={{ border: "1px solid " + (done ? COLORS.textMuted : COLORS.accent), color: done ? COLORS.textMuted : COLORS.accent }}>
-                        {done ? "Đã hoàn thành" : "Ghi nhận"}
-                      </button>
-                    </div>
-                  </div>
+                  <RecurringItemCard
+                    key={r.id}
+                    r={r} acc={acc} done={done} pending={pending} txList={txList}
+                    unitLabel={unitLabel}
+                    onEdit={startEditRecurring} onRemove={removeRecurring}
+                    onToggleActive={toggleRecurringActive}
+                    onLog={(r) => logRecurring(r)}
+                    onEditTx={(t) => { setTab("nhap"); startEditTx(t); }}
+                  />
                 );
               })}
               {recurring.length === 0 && <p className="sans text-xs" style={{ color: COLORS.textMuted }}>Chưa có khoản định kỳ — thêm trong Cài đặt.</p>}
@@ -1344,13 +1484,23 @@ function startEditRecurring(r) {
                 </select>
               </div>
 
-              {accById(newRecurring.accountId)?.type === "credit" ? (
-                <p className="sans text-xs" style={{ color: COLORS.textSecondary }}>
-                  Ngày ghi nhận: <span className="mono">{fmtDate(newRecurring.startDate)}</span> (tự động = trước ngày chốt sao kê 1 ngày)
-                </p>
-              ) : (
-                <div><label className="lbl">Ngày ghi nhận</label><input type="date" value={newRecurring.startDate} onChange={(e) => setNewRecurring({ ...newRecurring, startDate: e.target.value })} /></div>
-              )}
+              <div>
+                <label className="lbl">
+                  {accById(newRecurring.accountId)?.type === "credit" ? "Ngày phát sinh / mua hàng" : "Ngày ghi nhận"}
+                </label>
+                <input type="date" value={newRecurring.startDate} onChange={(e) => setNewRecurring({ ...newRecurring, startDate: e.target.value })} />
+                {accById(newRecurring.accountId)?.type === "credit" && newRecurring.startDate && (
+                  <p className="sans text-xs mt-1" style={{ color: COLORS.textMuted }}>
+                    Kỳ ghi nhận đầu tiên: <span className="mono" style={{ color: COLORS.textSecondary }}>
+                      {fmtDate((() => {
+                        const acc = accById(newRecurring.accountId);
+                        const d = occurrenceDate({ startDate: newRecurring.startDate, repeatUnit: "month", repeatValue: Number(newRecurring.repeatValue) || 1 }, acc, 0);
+                        return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+                      })())}
+                    </span>
+                  </p>
+                )}
+              </div>
 
               <div className="flex gap-2 items-end">
                 <div style={{ width: 90 }}><label className="lbl">Lặp mỗi</label><input type="number" min="1" value={newRecurring.repeatValue} onChange={(e) => setNewRecurring({ ...newRecurring, repeatValue: e.target.value })} /></div>
