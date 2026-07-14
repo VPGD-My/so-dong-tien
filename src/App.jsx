@@ -236,11 +236,19 @@ function Chip({ label, active, onClick, onRemove }) {
   );
 }
 
-function Section({ title, children, right, id }) {
+function Section({ title, children, right, id, accent }) {
   return (
     <div className="pt-2" id={id}>
-      <div className="flex items-center justify-between mb-3">
-        <p className="sans text-xs" style={{ color: COLORS.textSecondary, letterSpacing: 0.4 }}>{title}</p>
+      <div
+        className="flex items-center justify-between mb-3"
+        style={accent ? { borderBottom: "1px solid " + COLORS.border, paddingBottom: 8 } : undefined}
+      >
+        <p
+          className={accent ? "sans text-sm" : "sans text-xs"}
+          style={{ color: accent ? COLORS.cream : COLORS.textSecondary, letterSpacing: 0.4, fontWeight: accent ? 600 : 400 }}
+        >
+          {title}
+        </p>
         {right}
       </div>
       {children}
@@ -1374,7 +1382,7 @@ async function toggleRecurringActive(r) {
       {/* CAI DAT */}
       {tab === "caidat" && (
         <div className="px-5 pt-5 space-y-7">
-          <Section title="Thành viên">
+          <Section title="Thành viên" accent>
             <div className="flex flex-wrap gap-2 mb-2">
               {members.map((m) => <Chip key={m} label={m} onRemove={() => removeMember(m)} />)}
             </div>
@@ -1384,7 +1392,7 @@ async function toggleRecurringActive(r) {
             </div>
           </Section>
 
-          <Section title="Danh mục chi tiêu / thu nhập">
+          <Section title="Danh mục chi tiêu / thu nhập" accent>
             <div className="flex gap-2 mb-3">
               {[{ v: "expense", l: "Chi tiêu" }, { v: "income", l: "Thu nhập" }].map((o) => (
                 <Chip key={o.v} label={o.l} active={newCatType === o.v} onClick={() => setNewCatType(o.v)} />
@@ -1401,7 +1409,7 @@ async function toggleRecurringActive(r) {
             </div>
           </Section>
 
-          <Section title="Nhà cung cấp / nơi mua (NCC)">
+          <Section title="Nhà cung cấp / nơi mua (NCC)" accent>
             <div className="flex flex-wrap gap-2 mb-2">
               {vendors.map((v) => <Chip key={v} label={v} onRemove={() => removeVendor(v)} />)}
             </div>
@@ -1411,7 +1419,7 @@ async function toggleRecurringActive(r) {
             </div>
           </Section>
 
-          <Section title="Thêm tài khoản mới" id="add-account-section">
+          <Section title="Thêm tài khoản mới" id="add-account-section" accent>
             <div className="space-y-2">
               <input placeholder="Tên tài khoản" value={newAcc.name} onChange={(e) => setNewAcc({ ...newAcc, name: e.target.value })} />
               <select value={newAcc.type} onChange={(e) => setNewAcc({ ...newAcc, type: e.target.value })}>
@@ -1450,7 +1458,7 @@ async function toggleRecurringActive(r) {
             </div>
           </Section>
 
-          <Section title="Thêm ngân sách theo danh mục" id="add-budget-section">
+          <Section title="Thêm ngân sách theo danh mục" id="add-budget-section" accent>
             <div className="flex gap-2">
               <select value={newBudget.category} onChange={(e) => setNewBudget({ ...newBudget, category: e.target.value })} style={{ flex: 1 }}>
                 {expenseCats.map((c) => <option key={c} value={c}>{c}</option>)}
@@ -1460,7 +1468,7 @@ async function toggleRecurringActive(r) {
             </div>
           </Section>
 
-          <Section title="Thêm khoản định kỳ" id="add-recurring-section">
+          <Section title="Thêm khoản định kỳ" id="add-recurring-section" accent>
             <div className="space-y-2">
               <input placeholder="Tên khoản định kỳ (VD: Trả góp xe)" value={newRecurring.name} onChange={(e) => setNewRecurring({ ...newRecurring, name: e.target.value })} />
 
