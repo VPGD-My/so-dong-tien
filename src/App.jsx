@@ -67,9 +67,11 @@ function recFromDb(row) {
     accountId: row.account_id,
     startDate: row.start_date,
     repeatValue: row.interval_value,
-    repeatUnit: row.interval_unit === "nam" ? "year" : "month",
+    repeatUnit: UNIT_APP_MAP[row.interval_unit] || "month",
     cycleCount: row.cycle_count || 0,
     doneCount: row.done_count || 0,
+    principal: row.principal || 0,
+    isInstallment: row.is_installment || false,
   };
 }
 function recToDb(r) {
@@ -80,7 +82,10 @@ function recToDb(r) {
     account_id: r.accountId,
     start_date: r.startDate,
     interval_value: r.repeatValue,
-    interval_unit: r.repeatUnit === "year" ? "nam" : "thang",
+    interval_unit: UNIT_DB_MAP[r.repeatUnit] || "thang",
+    cycle_count: r.cycleCount ? Number(r.cycleCount) : null,
+    principal: r.principal ? Number(r.principal) : null,
+    is_installment: r.isInstallment || false,
   };
 }
 
@@ -109,7 +114,10 @@ const ACCOUNT_TYPES = [
   { value: "loan", label: "Cho vay", icon: Users },
   { value: "payable", label: "Khoản phải trả", icon: ArrowDownCircle },
 ];
-const REPEAT_UNITS = [{ v: "day", l: "ngày" }, { v: "month", l: "tháng" }, { v: "year", l: "năm" }];
+
+const REPEAT_UNITS = [{ v: "day", l: "ngày" }, { v: "week", l: "tuần" }, { v: "month", l: "tháng" }, { v: "year", l: "năm" }];
+const UNIT_DB_MAP = { day: "ngay", week: "tuan", month: "thang", year: "nam" };
+const UNIT_APP_MAP = { ngay: "day", tuan: "week", thang: "month", nam: "year" };
 
 function pad(n) { return String(n).padStart(2, "0"); }
 function fmtDate(iso) {
@@ -124,6 +132,13 @@ function monthLabel(key) {
 function fmtVND(n) { return Math.round(n || 0).toLocaleString("vi-VN") + " đ"; }
 function todayISO() {
   const d = new Date();
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
+function creditInstallmentDefaultDate(account) {
+  const now = new Date();
+  const day = Math.max(1, (account?.statementDay || 1) - 1);
+  const d = new Date(now.getFullYear(), now.getMonth(), day);
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 }
 
@@ -146,6 +161,16 @@ function getCashFlowDate(tx, account) {
   const offset = account.dueMonthOffset ?? 1; // 0 = hạn TT cùng tháng chốt sao kê, 1 = hạn TT tháng sau
   const dueMonth = statementMonth + offset;
   return new Date(txDate.getFullYear(), dueMonth, account.dueDay);
+}
+
+function nextDueDate(r) {
+  const d = new Date(r.startDate + "T00:00:00");
+  const n = r.doneCount;
+  if (r.repeatUnit === "year") d.setFullYear(d.getFullYear() + n * r.repeatValue);
+  else if (r.repeatUnit === "week") d.setDate(d.getDate() + n * r.repeatValue * 7);
+  else if (r.repeatUnit === "day") d.setDate(d.getDate() + n * r.repeatValue);
+  else d.setMonth(d.getMonth() + n * r.repeatValue);
+  return d;
 }
 
 function inPeriod(dateStr, period) {
@@ -323,6 +348,7 @@ export default function App() {
   const [loadingData, setLoadingData] = useState(true);
   const [accounts, setAccounts] = useState([]);
   const [members, setMembers] = useState([]);
+  const [entryOpen, setEntryOpen] = useState(false);
   const [expenseCats, setExpenseCats] = useState([]);
   const [incomeCats, setIncomeCats] = useState([]);
   const [vendors, setVendors] = useState([]);
@@ -331,6 +357,7 @@ export default function App() {
   const [budgets, setBudgets] = useState([]);
   const [editingId, setEditingId] = useState(null);
   const [editingAccId, setEditingAccId] = useState(null);
+  const [editingBudgetCat, setEditingBudgetCat] = useState(null);
   const [detailTx, setDetailTx] = useState(null);
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
@@ -357,6 +384,7 @@ export default function App() {
   const [newVendorName, setNewVendorName] = useState("");
   const [newMemberName, setNewMemberName] = useState("");
   const [newRecurring, setNewRecurring] = useState({ name: "", amount: "", category: "", accountId: "", startDate: todayISO(), repeatValue: 1, repeatUnit: "month", cycleCount: "", principal: "", isInstallment: false });
+  const [editingRecurringId, setEditingRecurringId] = useState(null);
   const [newBudget, setNewBudget] = useState({ category: "", limit: "" });
   
 useEffect(() => {
@@ -369,6 +397,22 @@ useEffect(() => {
   });
   return () => subscription.unsubscribe();
 }, []);
+
+// Tự set ngày ghi nhận = ngày sao kê - 1 nếu chọn tài khoản tín dụng
+useEffect(() => {
+  const acc = accById(newRecurring.accountId);
+  if (acc && acc.type === "credit") {
+    setNewRecurring((r) => ({ ...r, startDate: creditInstallmentDefaultDate(acc) }));
+  }
+}, [newRecurring.accountId]);
+
+// Tự tính số tiền mỗi kỳ = nguyên giá / số chu kỳ
+useEffect(() => {
+  if (newRecurring.isInstallment && newRecurring.principal && Number(newRecurring.cycleCount) > 0) {
+    const per = Math.round(Number(newRecurring.principal) / Number(newRecurring.cycleCount));
+    setNewRecurring((r) => ({ ...r, amount: String(per) }));
+  }
+}, [newRecurring.isInstallment, newRecurring.principal, newRecurring.cycleCount]);
 
 useEffect(() => {
   if (!session) return;
@@ -426,6 +470,7 @@ useEffect(() => {
     setTxs(txs.map((t) => t.id === editingId ? txFromDb(data) : t));
     setEditingId(null);
     showToast("Đã cập nhật giao dịch");
+    setEntryOpen(false);
   } else {
     const { data, error } = await supabase.from("transactions").insert(payload).select().single();
     if (error) { console.error(error); return; }
@@ -433,6 +478,7 @@ useEffect(() => {
   }
   setForm({ ...form, amount: "", note: "", vendor: "" });
   showToast("Đã lưu giao dịch");
+  setEntryOpen(false);
 }
 
   async function removeTx(id) {
@@ -455,7 +501,13 @@ useEffect(() => {
       accountId: t.accountId || "", vendor: t.vendor || "", note: t.note || "",
       fromAccountId: t.accountId || "", toAccountId: t.toAccountId || "",
     });
-    window.scrollTo({ top: 0, behavior: "smooth" });
+    setEntryOpen(true);
+  }
+
+  function resetEntryForm() {
+    setEditingId(null);
+    setEntryType("expense");
+    setForm({ date: todayISO(), amount: "", category: "", member: "", accountId: "", vendor: "", note: "", fromAccountId: "", toAccountId: "" });
   }
 
   async function removeCategory(name, type) {
@@ -551,15 +603,41 @@ function startEditAccount(a) {
   setAccounts(accounts.map((a) => a.id === id ? { ...a, includeNetWorth: !a.includeNetWorth } : a));
   }
 
-  async function addRecurring() {
-    if (!newRecurring.name.trim() || !newRecurring.amount) return;
-    const payload = recToDb({ ...newRecurring, amount: Number(newRecurring.amount), repeatValue: Number(newRecurring.repeatValue) || 1 });
-    const { data, error } = await supabase.from("recurring_items").insert(payload).select().single();
-    if (error) { console.error(error); return; }
-    setRecurring([...recurring, recFromDb(data)]);
-    setNewRecurring({ name: "", amount: "", category: expenseCats[0] || "", accountId: accounts[0]?.id || "", startDate: todayISO(), repeatValue: 1, repeatUnit: "month", cycleCount: "", principal: "", isInstallment: false });
-    showToast("Đã thêm khoản định kỳ");
-  }
+async function saveRecurring() {
+if (!newRecurring.name.trim() || !newRecurring.amount) return;
+const payload = recToDb({ ...newRecurring, amount: Number(newRecurring.amount), repeatValue: Number(newRecurring.repeatValue) || 1 });
+if (editingRecurringId) {
+  const { data, error } = await supabase.from("recurring_items").update(payload).eq("id", editingRecurringId).select().single();
+  if (error) { console.error(error); return; }
+  setRecurring(recurring.map((r) => r.id === editingRecurringId ? recFromDb(data) : r));
+  showToast("Đã cập nhật khoản định kỳ");
+} else {
+  const { data, error } = await supabase.from("recurring_items").insert(payload).select().single();
+  if (error) { console.error(error); return; }
+  setRecurring([...recurring, recFromDb(data)]);
+  showToast("Đã thêm khoản định kỳ");
+}
+setEditingRecurringId(null);
+setNewRecurring({ name: "", amount: "", category: expenseCats[0] || "", accountId: accounts[0]?.id || "", startDate: todayISO(), repeatValue: 1, repeatUnit: "month", cycleCount: "", principal: "", isInstallment: false });
+}
+
+function startEditRecurring(r) {
+  setEditingRecurringId(r.id);
+  setNewRecurring({
+    name: r.name,
+    amount: String(r.amount || ""),
+    category: r.category,
+    accountId: r.accountId,
+    startDate: r.startDate,
+    repeatValue: r.repeatValue,
+    repeatUnit: r.repeatUnit,
+    cycleCount: r.cycleCount ? String(r.cycleCount) : "",
+    principal: r.principal ? String(r.principal) : "",
+    isInstallment: r.isInstallment,
+  });
+  setTab("caidat");
+  setTimeout(() => document.getElementById("add-recurring-section")?.scrollIntoView({ behavior: "smooth" }), 100);
+}
 
   async function removeRecurring(id) {
   if (!window.confirm("Xóa khoản định kỳ này?")) return;
@@ -582,20 +660,28 @@ function startEditAccount(a) {
   setRecurring(recurring.map((x) => x.id === r.id ? { ...x, doneCount: x.doneCount + 1 } : x));
   }
 
-  async function addBudget() {
+  async function saveBudget() {
     if (!newBudget.limit) return;
     const existing = budgets.find((b) => b.category === newBudget.category);
     if (existing) {
       const { error } = await supabase.from("budgets").update({ monthly_limit: Number(newBudget.limit) }).eq("id", existing.id);
       if (error) { console.error(error); return; }
       setBudgets(budgets.map((b) => b.category === newBudget.category ? { ...b, limit: Number(newBudget.limit) } : b));
+      showToast("Đã cập nhật ngân sách");
     } else {
       const { data, error } = await supabase.from("budgets").insert({ category: newBudget.category, monthly_limit: Number(newBudget.limit) }).select().single();
       if (error) { console.error(error); return; }
       setBudgets([...budgets, { id: data.id, category: data.category, limit: data.monthly_limit }]);
+      showToast("Đã tạo ngân sách");
     }
+    setEditingBudgetCat(null);
     setNewBudget({ category: expenseCats[0] || "", limit: "" });
-    showToast("Đã lưu ngân sách");
+  }
+  function startEditBudget(b) {
+    setEditingBudgetCat(b.category);
+    setNewBudget({ category: b.category, limit: String(b.limit) });
+    setTab("caidat");
+    setTimeout(() => document.getElementById("add-budget-section")?.scrollIntoView({ behavior: "smooth" }), 100);
   }
 
   async function removeBudget(cat) {
@@ -607,6 +693,34 @@ function startEditAccount(a) {
   setBudgets(budgets.filter((x) => x.category !== cat));
   showToast("Đã xóa ngân sách");
   }
+
+  const upcomingByUnit = useMemo(() => {
+    const g = { week: 0, month: 0, year: 0 };
+    recurring.forEach((r) => {
+      const done = r.cycleCount > 0 && r.doneCount >= r.cycleCount;
+      if (!done && g[r.repeatUnit] !== undefined) g[r.repeatUnit] += r.amount;
+    });
+    return g;
+  }, [recurring]);
+
+  const pendingRecurring = useMemo(() => {
+    const now = new Date(); now.setHours(0, 0, 0, 0);
+    return recurring.filter((r) => {
+      const done = r.cycleCount > 0 && r.doneCount >= r.cycleCount;
+      return !done && nextDueDate(r) <= now;
+    });
+  }, [recurring]);
+
+  const installmentReserved = useMemo(() => {
+    const g = {};
+    recurring.forEach((r) => {
+      if (!r.isInstallment || !r.principal) return;
+      const paid = r.doneCount * r.amount;
+      const remaining = Math.max(0, r.principal - paid);
+      g[r.accountId] = (g[r.accountId] || 0) + remaining;
+    });
+    return g;
+  }, [recurring]);
 
   const balances = useMemo(() => {
     const bal = {};
@@ -778,137 +892,29 @@ function startEditAccount(a) {
 
       {/* NHAP */}
       {tab === "nhap" && (
-        <div className="px-5 pt-5 space-y-5">
-          <div className="flex gap-2">
-            {[
-              { v: "expense", l: "Chi tiêu", icon: TrendingDown },
-              { v: "income", l: "Thu nhập", icon: TrendingUp },
-              { v: "transfer", l: "Chuyển khoản", icon: ArrowRightLeft },
-            ].map((o) => (
-              <button key={o.v} onClick={() => setEntryType(o.v)} className="sans flex-1 py-2.5 rounded-md flex items-center justify-center gap-1.5"
-                style={{ fontSize: 13, border: "1px solid " + (entryType === o.v ? COLORS.cream : COLORS.border), color: entryType === o.v ? COLORS.cream : COLORS.textSecondary, background: entryType === o.v ? "#3A3624" : "transparent" }}>
-                <o.icon size={14} /> {o.l}
-              </button>
-            ))}
-          </div>
-
-          <div>
-            <label className="lbl">Ngày</label>
-            <div className="date-wrap">
-              <input type="date" value={form.date} onChange={(e) => setForm({ ...form, date: e.target.value })} />
+      <div className="px-5 pt-5 space-y-5">
+        <div style={{ position: "sticky", top: 0, zIndex: 10, background: COLORS.bg, paddingTop: 8, paddingBottom: 8, marginBottom: 4 }}>
+          <div className="flex items-center justify-between gap-2 mb-3">
+            <div className="flex gap-2" style={{ overflowX: "auto" }}>
+              {[{ v: "today", l: "Hôm nay" }, { v: "week", l: "Tuần này" }, { v: "month", l: "Tháng này" }, { v: "all", l: "Tất cả" }].map((o) => (
+                <Chip key={o.v} label={o.l} active={txPeriod === o.v} onClick={() => setTxPeriod(o.v)} />
+              ))}
             </div>
-          </div>
-          <div><label className="lbl">Số tiền</label><AmountInput value={form.amount} onChange={(v) => setForm({ ...form, amount: v })} /></div>
-
-          {entryType === "transfer" ? (
-            <>
-              <div className="flex items-center gap-2">
-                <div className="flex-1"><label className="lbl">Từ tài khoản</label>
-                  <select value={form.fromAccountId} onChange={(e) => setForm({ ...form, fromAccountId: e.target.value })}>
-                    {accounts.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
-                  </select>
-                </div>
-                <ArrowRight size={16} style={{ marginTop: 20, color: COLORS.textMuted }} />
-                <div className="flex-1"><label className="lbl">Đến tài khoản</label>
-                  <select value={form.toAccountId} onChange={(e) => setForm({ ...form, toAccountId: e.target.value })}>
-                    {accounts.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
-                  </select>
-                </div>
-              </div>
-              <div><label className="lbl">Ghi chú</label><input value={form.note} onChange={(e) => setForm({ ...form, note: e.target.value })} placeholder="VD: Chuyển tiết kiệm tháng 7" /></div>
-            </>
-          ) : (
-            <>
-              <div>
-                <div className="flex items-center justify-between mb-2">
-                  <label className="lbl" style={{ marginBottom: 0 }}>Danh mục</label>
-                  <button onClick={() => setTab("caidat")} className="sans" style={{ fontSize: 11, color: COLORS.textMuted }}>+ Thêm mới trong Cài đặt</button>
-                </div>
-                <div className="flex flex-wrap gap-2">
-                  {(entryType === "income" ? incomeCats : expenseCats).map((c) => (
-                    <Chip key={c} label={c} active={form.category === c} onClick={() => setForm({ ...form, category: c })} />
-                  ))}
-                </div>
-              </div>
-
-              {entryType === "expense" && (
-                <div>
-                  <div className="flex items-center justify-between mb-2">
-                    <label className="lbl" style={{ marginBottom: 0 }}>Nhà cung cấp / nơi mua</label>
-                    <button onClick={() => setTab("caidat")} className="sans" style={{ fontSize: 11, color: COLORS.textMuted }}>+ Thêm mới trong Cài đặt</button>
-                  </div>
-                  <div className="flex flex-wrap gap-2">
-                    {vendors.map((v) => (
-                      <Chip key={v} label={v} active={form.vendor === v} onClick={() => setForm({ ...form, vendor: form.vendor === v ? "" : v })} />
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              <div><label className="lbl">Thành viên</label>
-                <select value={form.member} onChange={(e) => setForm({ ...form, member: e.target.value })}>
-                  {members.map((m) => <option key={m} value={m}>{m}</option>)}
-                </select>
-              </div>
-              <div><label className="lbl">Tài khoản</label>
-                <select value={form.accountId} onChange={(e) => setForm({ ...form, accountId: e.target.value })}>
-                  {accounts.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
-                </select>
-              </div>
-              <div><label className="lbl">Ghi chú</label><input value={form.note} onChange={(e) => setForm({ ...form, note: e.target.value })} placeholder="VD: Ăn trưa với đồng nghiệp" /></div>
-
-              {entryType === "expense" && accById(form.accountId)?.type === "credit" && form.date && (
-                <div className="sans text-xs rounded-md px-3 py-2 flex items-center gap-2" style={{ background: "#26301F", color: COLORS.accent, border: "1px solid " + COLORS.border }}>
-                  <ArrowRight size={13} /> Tiền sẽ bị trừ thực vào {(() => {
-                    const d = getCashFlowDate(form, accById(form.accountId));
-                    return `${pad(d.getDate())}/${pad(d.getMonth() + 1)}/${d.getFullYear()}`;
-                  })()}
-                </div>
-              )}
-            </>
-          )}
-
-          <button onClick={saveTx} className="w-full py-3 rounded-md sans text-sm flex items-center justify-center gap-2" style={{ background: COLORS.cream, color: COLORS.bg, fontWeight: 600, border: "none" }}>
-            <Plus size={16} /> {editingId ? "Cập nhật giao dịch" : "Lưu giao dịch"}
-          </button>
-          {editingId && (
-            <button onClick={() => { setEditingId(null); setForm({ ...form, amount: "", note: "", vendor: "" }); }} className="w-full py-2 rounded-md sans text-xs" style={{ border: "1px solid " + COLORS.border, color: COLORS.textMuted }}>
-              Hủy sửa
+            <button onClick={() => { setSearchOpen(!searchOpen); if (searchOpen) setSearchQuery(""); }} style={{ color: searchOpen ? COLORS.cream : COLORS.textMuted, flexShrink: 0 }}>
+              <Search size={18} />
             </button>
+          </div>
+          {searchOpen && (
+            <input autoFocus value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} placeholder="Tìm theo ghi chú, danh mục, NCC, thành viên..." className="mb-3" />
           )}
+          <div className="flex gap-3">
+            <MetricCard label="Tổng thu" value={periodIncome} color={COLORS.accent} />
+            <MetricCard label="Tổng chi" value={periodExpense} color={COLORS.expense} />
+          </div>
+        </div>
 
-         <div className="pt-2">
-            <div style={{ position: "sticky", top: 0, zIndex: 10, background: COLORS.bg, paddingTop: 8, paddingBottom: 8, marginBottom: 4 }}>
-              <div className="flex items-center justify-between gap-2 mb-3">
-              <div className="flex gap-2" style={{ overflowX: "auto" }}>
-                {[{ v: "today", l: "Hôm nay" }, { v: "week", l: "Tuần này" }, { v: "month", l: "Tháng này" }, { v: "all", l: "Tất cả" }].map((o) => (
-                  <Chip key={o.v} label={o.l} active={txPeriod === o.v} onClick={() => setTxPeriod(o.v)} />
-                ))}
-              </div>
-              <button
-                onClick={() => { setSearchOpen(!searchOpen); if (searchOpen) setSearchQuery(""); }}
-                style={{ color: searchOpen ? COLORS.cream : COLORS.textMuted, flexShrink: 0 }}
-              >
-                <Search size={18} />
-              </button>
-            </div>
-
-            {searchOpen && (
-              <input
-                autoFocus
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder="Tìm theo ghi chú, danh mục, NCC, thành viên..."
-                className="mb-3"
-              />
-            )}
-              <div className="flex gap-3">
-                <MetricCard label="Tổng thu" value={periodIncome} color={COLORS.accent} />
-                <MetricCard label="Tổng chi" value={periodExpense} color={COLORS.expense} />
-              </div>
-            </div>
-            
-           {recentList.map((t) => {
+        <div>
+          {recentList.map((t) => {
             const acc = accById(t.accountId);
             const color = t.type === "income" ? COLORS.accent : t.type === "transfer" ? COLORS.transfer : COLORS.expense;
             const sign = t.type === "income" ? "+" : t.type === "transfer" ? "" : "-";
@@ -935,11 +941,10 @@ function startEditAccount(a) {
               </div>
             );
           })}
-
-            {recentList.length === 0 && <p className="sans text-xs" style={{ color: COLORS.textMuted }}>Không có giao dịch trong khoảng này.</p>}
-          </div>
+          {recentList.length === 0 && <p className="sans text-xs" style={{ color: COLORS.textMuted }}>Không có giao dịch trong khoảng này.</p>}
         </div>
-      )}
+      </div>
+    )}
 
       {/* BAO CAO */}
       {tab === "baocao" && (
@@ -1109,11 +1114,14 @@ function startEditAccount(a) {
                 const spent = currentMonthExpenseByCat[b.category] || 0;
                 const pct = Math.min(100, (spent / b.limit) * 100);
                 const over = spent > b.limit;
-                return (
+               return (
                   <div key={b.category} className="rounded-lg p-3" style={{ background: COLORS.surface, border: "1px solid " + COLORS.border }}>
                     <div className="flex items-center justify-between mb-1.5">
                       <span className="sans text-sm">{b.category}</span>
-                      <button onClick={() => removeBudget(b.category)} style={{ color: COLORS.textMuted }}><Trash2 size={13} /></button>
+                      <div className="flex items-center gap-2">
+                        <button onClick={() => startEditBudget(b)} style={{ color: COLORS.textMuted }}><Pencil size={13} /></button>
+                        <button onClick={() => removeBudget(b.category)} style={{ color: COLORS.textMuted }}><Trash2 size={13} /></button>
+                      </div>
                     </div>
                     <div className="h-2 rounded-full mb-1.5" style={{ background: COLORS.surface2 }}>
                       <div className="h-2 rounded-full" style={{ width: `${pct}%`, background: over ? COLORS.expense : COLORS.accent }} />
@@ -1127,22 +1135,38 @@ function startEditAccount(a) {
           </Section>
 
           <Section title="Chi phí định kỳ (trả góp, chi phí cố định)">
+            {pendingRecurring.length > 0 && (
+              <div className="rounded-lg p-3 mb-3" style={{ background: "#332A1C", border: "1px solid " + COLORS.expense }}>
+                <p className="sans text-xs" style={{ color: COLORS.expense, fontWeight: 600 }}>
+                  {pendingRecurring.length} khoản đến hạn chưa ghi nhận
+                </p>
+              </div>
+            )}
+            <div className="sans text-xs mb-3 space-y-1" style={{ color: COLORS.textSecondary }}>
+              {upcomingByUnit.week > 0 && <p>Tuần tiếp theo: <span className="mono" style={{ color: COLORS.cream }}>{fmtVND(upcomingByUnit.week)}</span></p>}
+              {upcomingByUnit.month > 0 && <p>Tháng tiếp theo: <span className="mono" style={{ color: COLORS.cream }}>{fmtVND(upcomingByUnit.month)}</span></p>}
+              {upcomingByUnit.year > 0 && <p>Năm tiếp theo: <span className="mono" style={{ color: COLORS.cream }}>{fmtVND(upcomingByUnit.year)}</span></p>}
+            </div>
             <div className="space-y-2">
               {recurring.map((r) => {
                 const done = r.cycleCount > 0 && r.doneCount >= r.cycleCount;
+                const pending = !done && nextDueDate(r) <= new Date();
                 return (
-                  <div key={r.id} className="rounded-lg p-3" style={{ background: COLORS.surface, border: "1px solid " + COLORS.border }}>
+                  <div key={r.id} className="rounded-lg p-3" style={{ background: COLORS.surface, border: "1px solid " + (pending ? COLORS.expense : COLORS.border) }}>
                     <div className="flex items-center justify-between">
                       <div className="flex items-center gap-2">
                         <Repeat size={15} style={{ color: COLORS.cream }} />
                         <div>
-                          <p className="sans text-sm">{r.name}</p>
+                          <p className="sans text-sm">{r.name} {pending && <span style={{ color: COLORS.expense, fontSize: 11 }}>· Đến hạn</span>}</p>
                           <p className="sans text-xs" style={{ color: COLORS.textMuted }}>
                             {r.category} · mỗi {r.repeatValue} {unitLabel(r.repeatUnit)}/lần · từ {fmtDate(r.startDate)} · {r.cycleCount > 0 ? `${r.doneCount}/${r.cycleCount} chu kỳ` : `đã ghi ${r.doneCount} lần, không giới hạn`}
                           </p>
                         </div>
                       </div>
-                      <button onClick={() => removeRecurring(r.id)} style={{ color: COLORS.textMuted }}><Trash2 size={13} /></button>
+                      <div className="flex items-center gap-2">
+                        <button onClick={() => startEditRecurring(r)} style={{ color: COLORS.textMuted }}><Pencil size={13} /></button>
+                        <button onClick={() => removeRecurring(r.id)} style={{ color: COLORS.textMuted }}><Trash2 size={13} /></button>
+                      </div>
                     </div>
                     <div className="flex items-center justify-between mt-2">
                       <span className="mono text-xs">{fmtVND(r.amount)} · {accById(r.accountId)?.name}</span>
@@ -1189,7 +1213,7 @@ function startEditAccount(a) {
 
               {a.type === "credit" ? (
                 <div className="flex justify-between sans text-xs mt-2">
-                  <span className="mono" style={{ color: COLORS.cream }}>Khả dụng: {fmtVND((a.creditLimit || 0) - Math.max(0, -(balances[a.id] || 0)))}</span>
+                  <span className="mono" style={{ color: COLORS.cream }}>Khả dụng: {fmtVND((a.creditLimit || 0) - Math.max(0, -(balances[a.id] || 0)) - (installmentReserved[a.id] || 0))}</span>
                   <span style={{ color: COLORS.expense }}>Dư nợ: {fmtVND(Math.max(0, -(balances[a.id] || 0)))}</span>
                 </div>
               ) : (
@@ -1286,28 +1310,31 @@ function startEditAccount(a) {
             </div>
           </Section>
 
-          <Section title="Thêm ngân sách theo danh mục">
+          <Section title="Thêm ngân sách theo danh mục" id="add-budget-section">
             <div className="flex gap-2">
               <select value={newBudget.category} onChange={(e) => setNewBudget({ ...newBudget, category: e.target.value })} style={{ flex: 1 }}>
                 {expenseCats.map((c) => <option key={c} value={c}>{c}</option>)}
               </select>
               <div style={{ width: 140 }}><AmountInput value={newBudget.limit} onChange={(v) => setNewBudget({ ...newBudget, limit: v })} placeholder="Hạn mức" /></div>
-              <button onClick={addBudget} className="sans px-3 rounded-md" style={{ border: "1px solid " + COLORS.border, color: COLORS.textSecondary }}>+</button>
+              <button onClick={saveBudget} className="sans px-3 rounded-md" style={{ border: "1px solid " + COLORS.border, color: COLORS.textSecondary }}>+</button>
             </div>
           </Section>
 
-          <Section title="Thêm khoản định kỳ">
+          <Section title="Thêm khoản định kỳ" id="add-recurring-section">
             <div className="space-y-2">
               <input placeholder="Tên khoản định kỳ (VD: Trả góp xe)" value={newRecurring.name} onChange={(e) => setNewRecurring({ ...newRecurring, name: e.target.value })} />
+
               <label className="sans text-xs flex items-center gap-2" style={{ color: COLORS.textSecondary }}>
-                  <input type="checkbox" checked={newRecurring.isInstallment} onChange={(e) => setNewRecurring({ ...newRecurring, isInstallment: e.target.checked })} style={{ width: "auto" }} />
-                  Khoản trả góp (tự tính số tiền mỗi kỳ theo nguyên giá)
-                </label>
-                {newRecurring.isInstallment ? (
-                  <div><label className="lbl">Nguyên giá</label><AmountInput value={newRecurring.principal} onChange={(v) => setNewRecurring({ ...newRecurring, principal: v })} /></div>
-                ) : (
-                  <div style={{ width: "100%" }}><AmountInput value={newRecurring.amount} onChange={(v) => setNewRecurring({ ...newRecurring, amount: v })} placeholder="Số tiền mỗi lần" /></div>
-                )}
+                <input type="checkbox" checked={newRecurring.isInstallment} onChange={(e) => setNewRecurring({ ...newRecurring, isInstallment: e.target.checked })} style={{ width: "auto" }} />
+                Khoản trả góp (tự tính số tiền mỗi kỳ theo nguyên giá)
+              </label>
+
+              {newRecurring.isInstallment ? (
+                <div><label className="lbl">Nguyên giá</label><AmountInput value={newRecurring.principal} onChange={(v) => setNewRecurring({ ...newRecurring, principal: v })} /></div>
+              ) : (
+                <div style={{ width: "100%" }}><AmountInput value={newRecurring.amount} onChange={(v) => setNewRecurring({ ...newRecurring, amount: v })} placeholder="Số tiền mỗi lần" /></div>
+              )}
+
               <div className="flex gap-2">
                 <select value={newRecurring.category} onChange={(e) => setNewRecurring({ ...newRecurring, category: e.target.value })}>
                   {expenseCats.map((c) => <option key={c} value={c}>{c}</option>)}
@@ -1316,7 +1343,15 @@ function startEditAccount(a) {
                   {accounts.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
                 </select>
               </div>
-              <div><label className="lbl">Ngày bắt đầu</label><input type="date" value={newRecurring.startDate} onChange={(e) => setNewRecurring({ ...newRecurring, startDate: e.target.value })} /></div>
+
+              {accById(newRecurring.accountId)?.type === "credit" ? (
+                <p className="sans text-xs" style={{ color: COLORS.textSecondary }}>
+                  Ngày ghi nhận: <span className="mono">{fmtDate(newRecurring.startDate)}</span> (tự động = trước ngày chốt sao kê 1 ngày)
+                </p>
+              ) : (
+                <div><label className="lbl">Ngày ghi nhận</label><input type="date" value={newRecurring.startDate} onChange={(e) => setNewRecurring({ ...newRecurring, startDate: e.target.value })} /></div>
+              )}
+
               <div className="flex gap-2 items-end">
                 <div style={{ width: 90 }}><label className="lbl">Lặp mỗi</label><input type="number" min="1" value={newRecurring.repeatValue} onChange={(e) => setNewRecurring({ ...newRecurring, repeatValue: e.target.value })} /></div>
                 <div className="flex-1"><label className="lbl">Đơn vị</label>
@@ -1325,17 +1360,144 @@ function startEditAccount(a) {
                   </select>
                 </div>
                 <div style={{ width: 110 }}><label className="lbl">Số chu kỳ</label><input type="number" min="0" placeholder="0 = mãi" value={newRecurring.cycleCount} onChange={(e) => setNewRecurring({ ...newRecurring, cycleCount: e.target.value })} /></div>
-                {newRecurring.isInstallment && newRecurring.principal && Number(newRecurring.cycleCount) > 0 && (
-                  <p className="sans text-xs" style={{ color: COLORS.textSecondary }}>
-                    → Mỗi kỳ: {fmtVND(Number(newRecurring.principal) / Number(newRecurring.cycleCount))}
-                  </p>
-                )}
               </div>
-              <button onClick={addRecurring} className="w-full py-2.5 rounded-md sans text-sm" style={{ border: "1px solid " + COLORS.cream, color: COLORS.cream }}>+ Thêm khoản định kỳ</button>
+              {newRecurring.isInstallment && newRecurring.principal && Number(newRecurring.cycleCount) > 0 && (
+                <p className="sans text-xs" style={{ color: COLORS.textSecondary }}>→ Mỗi kỳ: {fmtVND(Number(newRecurring.principal) / Number(newRecurring.cycleCount))}</p>
+              )}
+              <button onClick={saveRecurring} className="w-full py-2.5 rounded-md sans text-sm" style={{ border: "1px solid " + COLORS.cream, color: COLORS.cream }}>
+                {editingRecurringId ? "Cập nhật khoản định kỳ" : "+ Thêm khoản định kỳ"}
+              </button>
+              {editingRecurringId && (
+                <button
+                  onClick={() => {
+                    setEditingRecurringId(null);
+                    setNewRecurring({ name: "", amount: "", category: expenseCats[0] || "", accountId: accounts[0]?.id || "", startDate: todayISO(), repeatValue: 1, repeatUnit: "month", cycleCount: "", principal: "", isInstallment: false });
+                  }}
+                  className="w-full py-2 rounded-md sans text-xs"
+                  style={{ border: "1px solid " + COLORS.border, color: COLORS.textMuted }}
+                >
+                  Hủy sửa
+                </button>
+              )}
             </div>
           </Section>
         </div>
       )}
+
+        {tab === "nhap" && (
+          <button
+            onClick={() => { resetEntryForm(); setEntryOpen(true); }}
+            style={{ position: "fixed", bottom: 84, right: 20, width: 56, height: 56, borderRadius: "50%", background: COLORS.cream, color: COLORS.bg, display: "flex", alignItems: "center", justifyContent: "center", boxShadow: "0 4px 16px rgba(0,0,0,0.4)", zIndex: 30, border: "none" }}
+          >
+            <Plus size={24} />
+          </button>
+        )}
+
+        {entryOpen && (
+          <div onClick={() => setEntryOpen(false)} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.6)", zIndex: 45, display: "flex", alignItems: "flex-end", justifyContent: "center" }}>
+            <div onClick={(e) => e.stopPropagation()} className="rounded-t-2xl p-5 w-full space-y-4" style={{ maxWidth: 480, background: COLORS.surface, border: "1px solid " + COLORS.border, maxHeight: "88vh", overflowY: "auto" }}>
+              <div className="flex items-center justify-between">
+                <p className="sans text-sm" style={{ color: COLORS.textSecondary }}>{editingId ? "Sửa giao dịch" : "Thêm giao dịch"}</p>
+                <button onClick={() => setEntryOpen(false)} style={{ color: COLORS.textMuted }}><X size={18} /></button>
+              </div>
+
+              <div className="flex gap-2">
+                {[
+                  { v: "expense", l: "Chi tiêu", icon: TrendingDown },
+                  { v: "income", l: "Thu nhập", icon: TrendingUp },
+                  { v: "transfer", l: "Chuyển khoản", icon: ArrowRightLeft },
+                ].map((o) => (
+                  <button key={o.v} onClick={() => setEntryType(o.v)} className="sans flex-1 py-2.5 rounded-md flex items-center justify-center gap-1.5"
+                    style={{ fontSize: 13, border: "1px solid " + (entryType === o.v ? COLORS.cream : COLORS.border), color: entryType === o.v ? COLORS.cream : COLORS.textSecondary, background: entryType === o.v ? "#3A3624" : "transparent" }}>
+                    <o.icon size={14} /> {o.l}
+                  </button>
+                ))}
+              </div>
+
+              <div>
+                <label className="lbl">Ngày</label>
+                <div className="date-wrap">
+                  <input type="date" value={form.date} onChange={(e) => setForm({ ...form, date: e.target.value })} />
+                </div>
+              </div>
+              <div><label className="lbl">Số tiền</label><AmountInput value={form.amount} onChange={(v) => setForm({ ...form, amount: v })} /></div>
+
+              {entryType === "transfer" ? (
+                <>
+                  <div className="flex items-center gap-2">
+                    <div className="flex-1"><label className="lbl">Từ tài khoản</label>
+                      <select value={form.fromAccountId} onChange={(e) => setForm({ ...form, fromAccountId: e.target.value })}>
+                        {accounts.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
+                      </select>
+                    </div>
+                    <ArrowRight size={16} style={{ marginTop: 20, color: COLORS.textMuted }} />
+                    <div className="flex-1"><label className="lbl">Đến tài khoản</label>
+                      <select value={form.toAccountId} onChange={(e) => setForm({ ...form, toAccountId: e.target.value })}>
+                        {accounts.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
+                      </select>
+                    </div>
+                  </div>
+                  <div><label className="lbl">Ghi chú</label><input value={form.note} onChange={(e) => setForm({ ...form, note: e.target.value })} placeholder="VD: Chuyển tiết kiệm tháng 7" /></div>
+                </>
+              ) : (
+                <>
+                  <div>
+                    <div className="flex items-center justify-between mb-2">
+                      <label className="lbl" style={{ marginBottom: 0 }}>Danh mục</label>
+                      <button onClick={() => { setEntryOpen(false); setTab("caidat"); }} className="sans" style={{ fontSize: 11, color: COLORS.textMuted }}>+ Thêm mới trong Cài đặt</button>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      {(entryType === "income" ? incomeCats : expenseCats).map((c) => (
+                        <Chip key={c} label={c} active={form.category === c} onClick={() => setForm({ ...form, category: c })} />
+                      ))}
+                    </div>
+                  </div>
+
+                  {entryType === "expense" && (
+                    <div>
+                      <div className="flex items-center justify-between mb-2">
+                        <label className="lbl" style={{ marginBottom: 0 }}>Nhà cung cấp / nơi mua</label>
+                        <button onClick={() => { setEntryOpen(false); setTab("caidat"); }} className="sans" style={{ fontSize: 11, color: COLORS.textMuted }}>+ Thêm mới trong Cài đặt</button>
+                      </div>
+                      <div className="flex flex-wrap gap-2">
+                        {vendors.map((v) => (
+                          <Chip key={v} label={v} active={form.vendor === v} onClick={() => setForm({ ...form, vendor: form.vendor === v ? "" : v })} />
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  <div><label className="lbl">Thành viên</label>
+                    <select value={form.member} onChange={(e) => setForm({ ...form, member: e.target.value })}>
+                      {members.map((m) => <option key={m} value={m}>{m}</option>)}
+                    </select>
+                  </div>
+                  <div><label className="lbl">Tài khoản</label>
+                    <select value={form.accountId} onChange={(e) => setForm({ ...form, accountId: e.target.value })}>
+                      {accounts.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
+                    </select>
+                  </div>
+                  <div><label className="lbl">Ghi chú</label><input value={form.note} onChange={(e) => setForm({ ...form, note: e.target.value })} placeholder="VD: Ăn trưa với đồng nghiệp" /></div>
+
+                  {entryType === "expense" && accById(form.accountId)?.type === "credit" && form.date && (
+                    <div className="sans text-xs rounded-md px-3 py-2 flex items-center gap-2" style={{ background: "#26301F", color: COLORS.accent, border: "1px solid " + COLORS.border }}>
+                      <ArrowRight size={13} /> Tiền sẽ bị trừ thực vào {(() => { const d = getCashFlowDate(form, accById(form.accountId)); return `${pad(d.getDate())}/${pad(d.getMonth() + 1)}/${d.getFullYear()}`; })()}
+                    </div>
+                  )}
+                </>
+              )}
+
+              <button onClick={saveTx} className="w-full py-3 rounded-md sans text-sm flex items-center justify-center gap-2" style={{ background: COLORS.cream, color: COLORS.bg, fontWeight: 600, border: "none" }}>
+                <Plus size={16} /> {editingId ? "Cập nhật giao dịch" : "Lưu giao dịch"}
+              </button>
+              {editingId && (
+                <button onClick={() => { setEntryOpen(false); resetEntryForm(); }} className="w-full py-2 rounded-md sans text-xs" style={{ border: "1px solid " + COLORS.border, color: COLORS.textMuted }}>
+                  Hủy sửa
+                </button>
+              )}
+            </div>
+          </div>
+        )}
 
         {detailTx && (() => {
           const acc = accById(detailTx.accountId);
