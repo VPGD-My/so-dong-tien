@@ -1308,25 +1308,57 @@ async function toggleRecurringActive(r) {
               {upcomingByUnit.month > 0 && <p>Tháng tiếp theo: <span className="mono" style={{ color: COLORS.cream }}>{fmtVND(upcomingByUnit.month)}</span></p>}
               {upcomingByUnit.year > 0 && <p>Năm tiếp theo: <span className="mono" style={{ color: COLORS.cream }}>{fmtVND(upcomingByUnit.year)}</span></p>}
             </div>
-            <div className="space-y-2">
-              {recurring.map((r) => {
-                const done = r.cycleCount > 0 && r.doneCount >= r.cycleCount;
-                const acc = accById(r.accountId);
-                const pending = !done && nextDueDate(r, acc) <= new Date();
-                const txList = txs.filter((t) => t.recurringId === r.id).sort((a, b) => (a.date < b.date ? 1 : -1));
+            <div className="space-y-4">
+              {(() => {
+                const installmentItems = recurring.filter((r) => r.isInstallment);
+                const fixedItems = recurring.filter((r) => !r.isInstallment);
+                const renderCard = (r) => {
+                  const done = r.cycleCount > 0 && r.doneCount >= r.cycleCount;
+                  const acc = accById(r.accountId);
+                  const pending = !done && nextDueDate(r, acc) <= new Date();
+                  const txList = txs.filter((t) => t.recurringId === r.id).sort((a, b) => (a.date < b.date ? 1 : -1));
+                  return (
+                    <RecurringItemCard
+                      key={r.id}
+                      r={r} acc={acc} done={done} pending={pending} txList={txList}
+                      unitLabel={unitLabel}
+                      onEdit={startEditRecurring} onRemove={removeRecurring}
+                      onToggleActive={toggleRecurringActive}
+                      onLog={(r) => logRecurring(r)}
+                      onEditTx={(t) => { setTab("nhap"); startEditTx(t); }}
+                    />
+                  );
+                };
+                const monthTotal = (items) => items.reduce((sum, r) => {
+                  const done = r.cycleCount > 0 && r.doneCount >= r.cycleCount;
+                  return (!done && r.repeatUnit === "month") ? sum + r.amount : sum;
+                }, 0);
+                const installmentMonthTotal = monthTotal(installmentItems);
+                const fixedMonthTotal = monthTotal(fixedItems);
                 return (
-                  <RecurringItemCard
-                    key={r.id}
-                    r={r} acc={acc} done={done} pending={pending} txList={txList}
-                    unitLabel={unitLabel}
-                    onEdit={startEditRecurring} onRemove={removeRecurring}
-                    onToggleActive={toggleRecurringActive}
-                    onLog={(r) => logRecurring(r)}
-                    onEditTx={(t) => { setTab("nhap"); startEditTx(t); }}
-                  />
+                  <>
+                    {installmentItems.length > 0 && (
+                      <div>
+                        <div className="flex items-center justify-between mb-2">
+                          <p className="sans text-xs" style={{ color: COLORS.cream, letterSpacing: 1, textTransform: "uppercase" }}>Trả góp</p>
+                          {installmentMonthTotal > 0 && <span className="mono text-xs" style={{ color: COLORS.cream }}>{fmtVND(installmentMonthTotal)}</span>}
+                        </div>
+                        <div className="space-y-2">{installmentItems.map(renderCard)}</div>
+                      </div>
+                    )}
+                    {fixedItems.length > 0 && (
+                      <div>
+                        <div className="flex items-center justify-between mb-2">
+                          <p className="sans text-xs" style={{ color: COLORS.textSecondary, letterSpacing: 1, textTransform: "uppercase" }}>Chi phí cố định</p>
+                          {fixedMonthTotal > 0 && <span className="mono text-xs" style={{ color: COLORS.textSecondary }}>{fmtVND(fixedMonthTotal)}</span>}
+                        </div>
+                        <div className="space-y-2">{fixedItems.map(renderCard)}</div>
+                      </div>
+                    )}
+                    {recurring.length === 0 && <p className="sans text-xs" style={{ color: COLORS.textMuted }}>Chưa có khoản định kỳ — thêm trong Cài đặt.</p>}
+                  </>
                 );
-              })}
-              {recurring.length === 0 && <p className="sans text-xs" style={{ color: COLORS.textMuted }}>Chưa có khoản định kỳ — thêm trong Cài đặt.</p>}
+              })()}
             </div>
           </Section>
         </div>
