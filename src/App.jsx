@@ -214,21 +214,121 @@ function AccIcon({ type, size = 16, color }) {
   return <Icon size={size} color={color} />;
 }
 
-function AmountInput({ value, onChange, placeholder = "0", align = "left" }) {
-  const display = value ? Number(value).toLocaleString("vi-VN") : "";
+function evalExpr(expr) {
+  if (!expr) return null;
+  if (!/^[0-9+\-*/().]*$/.test(expr)) return null;
+  try {
+    // eslint-disable-next-line no-new-func
+    const result = Function('"use strict"; return (' + expr + ')')();
+    return typeof result === "number" && isFinite(result) ? result : null;
+  } catch {
+    return null;
+  }
+}
+
+function CalcKeypad({ onKey, onClear, onBackspace, onEqual, onDone }) {
+  const keys = [
+    ["7", "8", "9", "÷"],
+    ["4", "5", "6", "×"],
+    ["1", "2", "3", "−"],
+    ["C", "0", "⌫", "+"],
+  ];
   return (
-    <input inputMode="numeric" className="mono" style={{ textAlign: align }} placeholder={placeholder}
-      value={display} onChange={(e) => onChange(e.target.value.replace(/[^\d]/g, ""))} />
+    <div className="rounded-lg p-2" style={{ background: COLORS.surface2, border: "1px solid " + COLORS.border }}>
+      <div className="grid grid-cols-4 gap-1.5">
+        {keys.flat().map((k) => (
+          <button
+            key={k}
+            type="button"
+            onClick={() => {
+              if (k === "C") onClear();
+              else if (k === "⌫") onBackspace();
+              else onKey(k === "×" ? "*" : k === "÷" ? "/" : k === "−" ? "-" : k);
+            }}
+            className="mono text-base py-2.5 rounded-md"
+            style={{
+              background: ["÷", "×", "−", "+"].includes(k) ? COLORS.accentDark : COLORS.surface,
+              color: k === "C" ? COLORS.expense : COLORS.textPrimary,
+              border: "1px solid " + COLORS.border,
+            }}
+          >
+            {k}
+          </button>
+        ))}
+      </div>
+      <div className="flex gap-1.5 mt-1.5">
+        <button type="button" onClick={onEqual} className="mono text-sm py-2.5 rounded-md flex-1" style={{ background: COLORS.accent, color: COLORS.bg, fontWeight: 700 }}>=</button>
+        <button type="button" onClick={onDone} className="sans text-sm py-2.5 rounded-md flex-1" style={{ border: "1px solid " + COLORS.cream, color: COLORS.cream }}>Xong</button>
+      </div>
+    </div>
+  );
+}
+
+function AmountInput({ value, onChange, placeholder = "0", align = "left" }) {
+  const [open, setOpen] = useState(false);
+  const [expr, setExpr] = useState("");
+  const wrapRef = useRef(null);
+
+  function commitAndClose() {
+    const result = evalExpr(expr);
+    if (result !== null) onChange(String(Math.round(result)));
+    setOpen(false);
+    setExpr("");
+  }
+
+  useEffect(() => {
+    if (!open) return;
+    function handleClickOutside(e) {
+      if (wrapRef.current && !wrapRef.current.contains(e.target)) commitAndClose();
+    }
+    document.addEventListener("mousedown", handleClickOutside);
+    document.addEventListener("touchstart", handleClickOutside);
+    return () => {
+      document.removeEventListener("mousedown", handleClickOutside);
+      document.removeEventListener("touchstart", handleClickOutside);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, expr]);
+
+  const display = open ? expr : (value ? Number(value).toLocaleString("vi-VN") : "");
+
+  return (
+    <div ref={wrapRef} style={{ position: "relative" }}>
+      <input
+        inputMode="none"
+        readOnly
+        className="mono"
+        style={{ textAlign: align }}
+        placeholder={placeholder}
+        value={display}
+        onFocus={() => { setOpen(true); setExpr(value ? String(value) : ""); }}
+      />
+      {open && (
+        <div style={{ marginTop: 6 }}>
+          <CalcKeypad
+            onKey={(k) => setExpr((e) => e + k)}
+            onClear={() => setExpr("")}
+            onBackspace={() => setExpr((e) => e.slice(0, -1))}
+            onEqual={() => {
+              const result = evalExpr(expr);
+              if (result !== null) setExpr(String(Math.round(result)));
+            }}
+            onDone={commitAndClose}
+          />
+        </div>
+      )}
+    </div>
   );
 }
 
 function Chip({ label, active, onClick, onRemove }) {
   return (
     <button onClick={onClick} className="sans" style={{
-      fontSize: 12, padding: "6px 12px", borderRadius: 999, display: "inline-flex", alignItems: "center", gap: 6,
+      fontSize: 11.5, padding: "5px 10px", borderRadius: 999, display: "inline-flex", alignItems: "center", gap: 5,
       border: "1px solid " + (active ? COLORS.cream : COLORS.border),
       background: active ? "#3A3624" : "transparent",
       color: active ? COLORS.cream : COLORS.textSecondary,
+      flexShrink: 0, whiteSpace: "nowrap",
     }}>
       {label}
       {onRemove && <X size={11} onClick={(e) => { e.stopPropagation(); onRemove(); }} />}
@@ -977,8 +1077,22 @@ async function toggleRecurringActive(r) {
   html { font-size: 18.4px; }
   input, select {
     background: ${COLORS.surface2}; border: 1px solid ${COLORS.border}; color: ${COLORS.textPrimary};
-    border-radius: 6px; padding: 10px 12px; font-size: 16px; width: 100%;
+    border-radius: 6px; padding: 10px 12px; font-size: 16px; width: 100%; line-height: 1.3;
   }
+
+  .chip-row { -ms-overflow-style: none; scrollbar-width: none; }
+  .chip-row::-webkit-scrollbar { display: none; }
+
+  select {
+    -webkit-appearance: none;
+    -moz-appearance: none;
+    appearance: none;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%23657059' stroke-width='1.5' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 12px center;
+    padding-right: 32px;
+  }
+
   input[type="date"] {
     width: 100%;
     box-sizing: border-box;
@@ -986,6 +1100,16 @@ async function toggleRecurringActive(r) {
     background: transparent;
     padding: 10px 8px;
   }
+
+  input[type="number"] {
+    -moz-appearance: textfield;
+  }
+  input[type="number"]::-webkit-outer-spin-button,
+  input[type="number"]::-webkit-inner-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+  }
+
   .date-wrap {
     background: ${COLORS.surface2};
     border: 1px solid ${COLORS.border};
@@ -1543,13 +1667,13 @@ async function toggleRecurringActive(r) {
               </div>
 
               <div className="flex gap-2 items-end">
-                <div style={{ width: 90 }}><label className="lbl">Lặp mỗi</label><input type="number" min="1" value={newRecurring.repeatValue} onChange={(e) => setNewRecurring({ ...newRecurring, repeatValue: e.target.value })} /></div>
+                <div style={{ width: 90 }}><label className="lbl">Lặp mỗi</label><input type="text" inputMode="numeric" pattern="[0-9]*" value={newRecurring.repeatValue} onChange={(e) => setNewRecurring({ ...newRecurring, repeatValue: e.target.value.replace(/[^\d]/g, "") })} /></div>
                 <div className="flex-1"><label className="lbl">Đơn vị</label>
                   <select value={newRecurring.repeatUnit} onChange={(e) => setNewRecurring({ ...newRecurring, repeatUnit: e.target.value })}>
                     {REPEAT_UNITS.map((u) => <option key={u.v} value={u.v}>{u.l}/lần</option>)}
                   </select>
                 </div>
-                <div style={{ width: 110 }}><label className="lbl">Số chu kỳ</label><input type="number" min="0" placeholder="0 = mãi" value={newRecurring.cycleCount} onChange={(e) => setNewRecurring({ ...newRecurring, cycleCount: e.target.value })} /></div>
+                <div style={{ width: 110 }}><label className="lbl">Số chu kỳ</label><input type="text" inputMode="numeric" pattern="[0-9]*" placeholder="0 = mãi" value={newRecurring.cycleCount} onChange={(e) => setNewRecurring({ ...newRecurring, cycleCount: e.target.value.replace(/[^\d]/g, "") })} /></div>
               </div>
               {newRecurring.isInstallment && newRecurring.principal && Number(newRecurring.cycleCount) > 0 && (
                 <p className="sans text-xs" style={{ color: COLORS.textSecondary }}>→ Mỗi kỳ: {fmtVND(Number(newRecurring.principal) / Number(newRecurring.cycleCount))}</p>
@@ -1585,7 +1709,8 @@ async function toggleRecurringActive(r) {
 
         {entryOpen && (
           <div onClick={() => setEntryOpen(false)} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.6)", zIndex: 45, display: "flex", alignItems: "flex-end", justifyContent: "center" }}>
-            <div onClick={(e) => e.stopPropagation()} className="rounded-t-2xl p-5 w-full space-y-4" style={{ maxWidth: 480, background: COLORS.surface, border: "1px solid " + COLORS.border, maxHeight: "88vh", overflowY: "auto" }}>
+            <div onClick={(e) => e.stopPropagation()} className="rounded-t-2xl p-4 w-full space-y-3" style={{ maxWidth: 480, background: COLORS.surface, border: "1px solid " + COLORS.border, maxHeight: "88vh", overflowY: "auto" }}>
+              
               <div className="flex items-center justify-between">
                 <p className="sans text-sm" style={{ color: COLORS.textSecondary }}>{editingId ? "Sửa giao dịch" : "Thêm giao dịch"}</p>
                 <button onClick={() => setEntryOpen(false)} style={{ color: COLORS.textMuted }}><X size={18} /></button>
@@ -1632,11 +1757,11 @@ async function toggleRecurringActive(r) {
               ) : (
                 <>
                   <div>
-                    <div className="flex items-center justify-between mb-2">
+                    <div className="flex items-center justify-between mb-1.5">
                       <label className="lbl" style={{ marginBottom: 0 }}>Danh mục</label>
                       <button onClick={() => { setEntryOpen(false); setTab("caidat"); }} className="sans" style={{ fontSize: 11, color: COLORS.textMuted }}>+ Thêm mới trong Cài đặt</button>
                     </div>
-                    <div className="flex flex-wrap gap-2">
+                    <div className="chip-row flex gap-2" style={{ overflowX: "auto", paddingBottom: 2 }}>
                       {(entryType === "income" ? incomeCats : expenseCats).map((c) => (
                         <Chip key={c} label={c} active={form.category === c} onClick={() => setForm({ ...form, category: c })} />
                       ))}
@@ -1645,11 +1770,11 @@ async function toggleRecurringActive(r) {
 
                   {entryType === "expense" && (
                     <div>
-                      <div className="flex items-center justify-between mb-2">
+                      <div className="flex items-center justify-between mb-1.5">
                         <label className="lbl" style={{ marginBottom: 0 }}>Nhà cung cấp / nơi mua</label>
                         <button onClick={() => { setEntryOpen(false); setTab("caidat"); }} className="sans" style={{ fontSize: 11, color: COLORS.textMuted }}>+ Thêm mới trong Cài đặt</button>
                       </div>
-                      <div className="flex flex-wrap gap-2">
+                      <div className="chip-row flex gap-2" style={{ overflowX: "auto", paddingBottom: 2 }}>
                         {vendors.map((v) => (
                           <Chip key={v} label={v} active={form.vendor === v} onClick={() => setForm({ ...form, vendor: form.vendor === v ? "" : v })} />
                         ))}
@@ -1657,15 +1782,17 @@ async function toggleRecurringActive(r) {
                     </div>
                   )}
 
-                  <div><label className="lbl">Thành viên</label>
-                    <select value={form.member} onChange={(e) => setForm({ ...form, member: e.target.value })}>
-                      {members.map((m) => <option key={m} value={m}>{m}</option>)}
-                    </select>
-                  </div>
-                  <div><label className="lbl">Tài khoản</label>
-                    <select value={form.accountId} onChange={(e) => setForm({ ...form, accountId: e.target.value })}>
-                      {accounts.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
-                    </select>
+                  <div className="flex gap-2">
+                    <div className="flex-1"><label className="lbl">Thành viên</label>
+                      <select value={form.member} onChange={(e) => setForm({ ...form, member: e.target.value })}>
+                        {members.map((m) => <option key={m} value={m}>{m}</option>)}
+                      </select>
+                    </div>
+                    <div className="flex-1"><label className="lbl">Tài khoản</label>
+                      <select value={form.accountId} onChange={(e) => setForm({ ...form, accountId: e.target.value })}>
+                        {accounts.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
+                      </select>
+                    </div>
                   </div>
                   <div><label className="lbl">Ghi chú</label><input value={form.note} onChange={(e) => setForm({ ...form, note: e.target.value })} placeholder="VD: Ăn trưa với đồng nghiệp" /></div>
 
@@ -1696,7 +1823,7 @@ async function toggleRecurringActive(r) {
           const sign = detailTx.type === "income" ? "+" : detailTx.type === "transfer" ? "" : "-";
           return (
             <div onClick={() => setDetailTx(null)} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.6)", zIndex: 40, display: "flex", alignItems: "flex-end", justifyContent: "center" }}>
-              <div onClick={(e) => e.stopPropagation()} className="rounded-t-2xl p-5 w-full" style={{ maxWidth: 480, background: COLORS.surface, border: "1px solid " + COLORS.border }}>
+              <div onClick={(e) => e.stopPropagation()} className="rounded-t-2xl p-4 w-full space-y-3" style={{ maxWidth: 480, background: COLORS.surface, border: "1px solid " + COLORS.border, maxHeight: "88vh", overflowY: "auto" }}>
                 <div className="flex items-center justify-between mb-4">
                   <p className="sans text-sm" style={{ color: COLORS.textSecondary }}>Chi tiết giao dịch</p>
                   <button onClick={() => setDetailTx(null)} style={{ color: COLORS.textMuted }}><X size={18} /></button>
