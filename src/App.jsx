@@ -226,6 +226,14 @@ function evalExpr(expr) {
   }
 }
 
+function formatExprDisplay(expr) {
+  return expr
+    .replace(/\*/g, "×")
+    .replace(/\//g, "÷")
+    .replace(/-/g, "−")
+    .replace(/\d+/g, (m) => Number(m).toLocaleString("vi-VN"));
+}
+
 function CalcKeypad({ onKey, onClear, onBackspace, onEqual, onDone }) {
   const keys = [
     ["7", "8", "9", "÷"],
@@ -234,8 +242,8 @@ function CalcKeypad({ onKey, onClear, onBackspace, onEqual, onDone }) {
     ["C", "0", "⌫", "+"],
   ];
   return (
-    <div className="rounded-lg p-2" style={{ background: COLORS.surface2, border: "1px solid " + COLORS.border }}>
-      <div className="grid grid-cols-4 gap-1.5">
+    <div className="rounded-lg p-3" style={{ background: COLORS.surface2, border: "1px solid " + COLORS.border }}>
+      <div className="grid grid-cols-4 gap-2">
         {keys.flat().map((k) => (
           <button
             key={k}
@@ -245,20 +253,22 @@ function CalcKeypad({ onKey, onClear, onBackspace, onEqual, onDone }) {
               else if (k === "⌫") onBackspace();
               else onKey(k === "×" ? "*" : k === "÷" ? "/" : k === "−" ? "-" : k);
             }}
-            className="mono text-base py-2.5 rounded-md"
+            className="mono rounded-lg"
             style={{
               background: ["÷", "×", "−", "+"].includes(k) ? COLORS.accentDark : COLORS.surface,
               color: k === "C" ? COLORS.expense : COLORS.textPrimary,
               border: "1px solid " + COLORS.border,
+              fontSize: k === "⌫" ? 26 : 20,
+              padding: "16px 0",
             }}
           >
             {k}
           </button>
         ))}
       </div>
-      <div className="flex gap-1.5 mt-1.5">
-        <button type="button" onClick={onEqual} className="mono text-sm py-2.5 rounded-md flex-1" style={{ background: COLORS.accent, color: COLORS.bg, fontWeight: 700 }}>=</button>
-        <button type="button" onClick={onDone} className="sans text-sm py-2.5 rounded-md flex-1" style={{ border: "1px solid " + COLORS.cream, color: COLORS.cream }}>Xong</button>
+      <div className="flex gap-2 mt-2">
+        <button type="button" onClick={onEqual} className="mono rounded-lg flex-1" style={{ background: COLORS.accent, color: COLORS.bg, fontWeight: 700, fontSize: 18, padding: "14px 0" }}>=</button>
+        <button type="button" onClick={onDone} className="sans rounded-lg flex-1" style={{ border: "1px solid " + COLORS.cream, color: COLORS.cream, fontSize: 15, padding: "14px 0" }}>Xong</button>
       </div>
     </div>
   );
@@ -290,7 +300,7 @@ function AmountInput({ value, onChange, placeholder = "0", align = "left" }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, expr]);
 
-  const display = open ? expr : (value ? Number(value).toLocaleString("vi-VN") : "");
+  const display = open ? formatExprDisplay(expr) : (value ? Number(value).toLocaleString("vi-VN") : "");
 
   return (
     <div ref={wrapRef} style={{ position: "relative" }}>
