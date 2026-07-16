@@ -1073,13 +1073,17 @@ async function toggleRecurringActive(r) {
   const periodIncome = periodTxs.filter((t) => t.type === "income").reduce((s, t) => s + t.amount, 0);
   const periodExpense = periodTxs.filter((t) => t.type === "expense").reduce((s, t) => s + t.amount, 0);
   const recentList = useMemo(() => {
-  const q = searchQuery.trim().toLowerCase();
-    return txs.filter((t) => {
-      if (!inPeriod(t.date, txPeriod)) return false;
-      if (!q) return true;
-      return [t.note, t.category, t.vendor, t.member].some((f) => (f || "").toLowerCase().includes(q));
-    });
-  }, [txs, txPeriod, searchQuery]);
+    const q = searchQuery.trim().toLowerCase();
+      return txs.filter((t) => {
+        if (!inPeriod(t.date, txPeriod)) return false;
+        if (!q) return true;
+        const qDigits = q.replace(/[^\d]/g, "");
+        const amountStr = String(t.amount || "");
+        const matchAmount = qDigits && amountStr.includes(qDigits);
+        const matchText = [t.note, t.category, t.vendor, t.member].some((f) => (f || "").toLowerCase().includes(q));
+        return matchText || matchAmount;
+      });
+    }, [txs, txPeriod, searchQuery]);
 
   const inputStyle = `
   * { box-sizing: border-box; }
