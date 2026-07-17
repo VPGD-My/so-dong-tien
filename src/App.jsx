@@ -66,6 +66,7 @@ function recFromDb(row) {
     name: row.name,
     amount: row.amount,
     category: row.category,
+    member: row.member,
     accountId: row.account_id,
     startDate: row.start_date,
     repeatValue: row.interval_value,
@@ -82,6 +83,7 @@ function recToDb(r) {
     name: r.name,
     amount: r.amount,
     category: r.category,
+    member: r.member || null,
     account_id: r.accountId,
     start_date: r.startDate,
     interval_value: r.repeatValue,
@@ -128,6 +130,13 @@ function fmtDate(iso) {
   const d = new Date(iso + "T00:00:00");
   return `${pad(d.getDate())}/${pad(d.getMonth() + 1)}/${d.getFullYear()}`;
 }
+
+const WEEKDAYS = ["Chủ Nhật", "Thứ Hai", "Thứ Ba", "Thứ Tư", "Thứ Năm", "Thứ Sáu", "Thứ Bảy"];
+function fmtDateWithWeekday(iso) {
+  const d = new Date(iso + "T00:00:00");
+  return `${WEEKDAYS[d.getDay()]}, ${pad(d.getDate())}/${pad(d.getMonth() + 1)}/${d.getFullYear()}`;
+}
+
 function monthKey(d) { return `${d.getFullYear()}-${pad(d.getMonth() + 1)}`; }
 function monthLabel(key) {
   const [y, m] = key.split("-");
@@ -160,7 +169,7 @@ function getCashFlowDate(tx, account) {
   const txDate = new Date(tx.date + "T00:00:00");
   if (!account || account.type !== "credit") return txDate;
   const day = txDate.getDate();
-  const belongsNext = day > account.statementDay;
+  const belongsNext = day >= account.statementDay;
   const statementMonth = txDate.getMonth() + (belongsNext ? 1 : 0);
   const offset = account.dueMonthOffset ?? 1; // 0 = hạn TT cùng tháng chốt sao kê, 1 = hạn TT tháng sau
   const dueMonth = statementMonth + offset;
@@ -185,6 +194,22 @@ function occurrenceDate(r, account, n) {
 
 function nextDueDate(r, account) {
   return occurrenceDate(r, account, r.doneCount);
+}
+
+function toISODate(d) {
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
+function lastStatementCutoff(account) {
+  const today = new Date();
+  const day = today.getDate();
+  if (day > account.statementDay) return new Date(today.getFullYear(), today.getMonth(), account.statementDay);
+  return new Date(today.getFullYear(), today.getMonth() - 1, account.statementDay);
+}
+
+function dueDateForCutoff(cutoff, account) {
+  const offset = account.dueMonthOffset ?? 1;
+  return new Date(cutoff.getFullYear(), cutoff.getMonth() + offset, account.dueDay);
 }
 
 function dueCountUpTo(r, account, today) {
@@ -375,7 +400,7 @@ function MetricCard({ label, value, color }) {
   );
 }
 
-  function CategoryRow({ label, amount, max, color, txList }) {
+ function CategoryRow({ label, amount, max, color, txList, onEditTx }) {
     const [open, setOpen] = useState(false);
     return (
       <div className="mb-2">
@@ -389,7 +414,7 @@ function MetricCard({ label, value, color }) {
         {open && (
           <div className="pl-2 mt-1.5 space-y-1">
             {txList.map((t) => (
-              <div key={t.id} className="flex justify-between sans text-xs" style={{ color: COLORS.textMuted }}>
+              <div key={t.id} className="flex justify-between sans text-xs" style={{ color: COLORS.textMuted, cursor: "pointer" }} onClick={(e) => { e.stopPropagation(); onEditTx && onEditTx(t); }}>
                 <span>{fmtDate(t.date)} · {t.note || t.vendor || "—"}</span>
                 <span className="mono">{fmtVND(t.amount)}</span>
               </div>
@@ -400,6 +425,30 @@ function MetricCard({ label, value, color }) {
       </div>
     );
   }
+
+function ReconcileRow({ label, value, items }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="rounded-lg p-3" style={{ background: COLORS.surface, border: "1px solid " + COLORS.border, cursor: items ? "pointer" : "default" }} onClick={() => items && setOpen(!open)}>
+      <div className="flex items-center justify-between">
+        <span className="sans text-xs" style={{ color: COLORS.textSecondary }}>{label}</span>
+        <span className="mono text-sm" style={{ color: COLORS.cream }}>{fmtVND(value)}</span>
+      </div>
+      {open && items && (
+        <div className="mt-2 space-y-1" style={{ borderTop: "1px solid " + COLORS.border, paddingTop: 8 }}>
+          {items.map((it, i) => (
+            <div key={i} className="flex justify-between sans text-xs" style={{ color: COLORS.textMuted }}>
+              <span>{it.label}</span>
+              <span className="mono" style={{ color: it.sign === "-" ? COLORS.accent : COLORS.textMuted }}>{it.sign === "-" ? "− " : "+ "}{fmtVND(it.amount)}</span>
+            </div>
+          ))}
+          {items.length === 0 && <p className="sans text-xs" style={{ color: COLORS.textMuted }}>Không có giao dịch.</p>}
+        </div>
+      )}
+    </div>
+  );
+}
+
 
 function RecurringItemCard({ r, acc, done, pending, txList, unitLabel, onEdit, onRemove, onToggleActive, onLog, onEditTx }) {
   const [open, setOpen] = useState(false);
@@ -460,7 +509,7 @@ function RecurringItemCard({ r, acc, done, pending, txList, unitLabel, onEdit, o
   );
 }
 
-function AccountReportCard({ account, data, balance, txList }) {
+function AccountReportCard({ account, data, balance, txList, onEditTx }) {
   const [open, setOpen] = useState(false);
   return (
     <div className="rounded-lg p-3" style={{ background: COLORS.surface, border: "1px solid " + COLORS.border, cursor: "pointer" }} onClick={() => setOpen(!open)}>
@@ -473,9 +522,9 @@ function AccountReportCard({ account, data, balance, txList }) {
       {open && (
         <div className="mt-2 pt-2 space-y-1" style={{ borderTop: "1px dashed " + COLORS.border }}>
           {txList.map((t) => (
-            <div key={t.id} className="flex justify-between sans text-xs" style={{ color: COLORS.textMuted }}>
-              <span>{fmtDate(t.date)} · {t.note || t.category || (t.type === "transfer" ? "Chuyển khoản" : "")}</span>
-              <span className="mono" style={{ color: t.type === "income" ? COLORS.accent : t.type === "transfer" ? COLORS.transfer : COLORS.expense }}>
+            <div key={t.id} className="flex justify-between sans text-xs" style={{ color: COLORS.textMuted, cursor: "pointer" }} onClick={(e) => { e.stopPropagation(); onEditTx && onEditTx(t); }}>
+              <span>{fmtDate(t.date)} · {t.category || (t.type === "transfer" ? "Chuyển khoản" : "—")}{t.note ? ` · ${t.note}` : ""}</span>
+              <span className="mono" style={{ color: t.type === "income" ? COLORS.accent : t.type === "transfer" ? COLORS.transfer : COLORS.expense, flexShrink: 0, marginLeft: 8 }}>
                 {t.type === "income" ? "+" : t.type === "transfer" ? "" : "-"}{fmtVND(t.amount)}
               </span>
             </div>
@@ -487,7 +536,7 @@ function AccountReportCard({ account, data, balance, txList }) {
   );
 }
 
-function MemberReportCard({ member, data, txList }) {
+function MemberReportCard({ member, data, txList, onEditTx }) {
   const [open, setOpen] = useState(false);
   return (
     <div className="rounded-lg p-3" style={{ background: COLORS.surface, border: "1px solid " + COLORS.border, cursor: "pointer" }} onClick={() => setOpen(!open)}>
@@ -499,9 +548,9 @@ function MemberReportCard({ member, data, txList }) {
       {open && (
         <div className="mt-2 pt-2 space-y-1" style={{ borderTop: "1px dashed " + COLORS.border }}>
           {txList.map((t) => (
-            <div key={t.id} className="flex justify-between sans text-xs" style={{ color: COLORS.textMuted }}>
-              <span>{fmtDate(t.date)} · {t.note || t.category}</span>
-              <span className="mono" style={{ color: t.type === "income" ? COLORS.accent : COLORS.expense }}>
+            <div key={t.id} className="flex justify-between sans text-xs" style={{ color: COLORS.textMuted, cursor: "pointer" }} onClick={(e) => { e.stopPropagation(); onEditTx && onEditTx(t); }}>
+              <span>{fmtDate(t.date)} · {t.category}{t.note ? ` · ${t.note}` : ""}</span>
+              <span className="mono" style={{ color: t.type === "income" ? COLORS.accent : COLORS.expense, flexShrink: 0, marginLeft: 8 }}>
                 {t.type === "income" ? "+" : "-"}{fmtVND(t.amount)}
               </span>
             </div>
@@ -513,7 +562,7 @@ function MemberReportCard({ member, data, txList }) {
   );
 }
 
-function MonthReportCard({ monthKeyStr, data, txList }) {
+function MonthReportCard({ monthKeyStr, data, txList, onEditTx }) {
   const [open, setOpen] = useState(false);
   return (
     <div className="rounded-lg p-3" style={{ background: COLORS.surface, border: "1px solid " + COLORS.border, cursor: "pointer" }} onClick={() => setOpen(!open)}>
@@ -530,7 +579,7 @@ function MonthReportCard({ monthKeyStr, data, txList }) {
       {open && (
         <div className="mt-2 pt-2 space-y-1" style={{ borderTop: "1px dashed " + COLORS.border }}>
           {txList.map((t) => (
-            <div key={t.id} className="flex justify-between sans text-xs" style={{ color: COLORS.textMuted }}>
+            <div key={t.id} className="flex justify-between sans text-xs" style={{ color: COLORS.textMuted, cursor: "pointer" }} onClick={(e) => { e.stopPropagation(); onEditTx && onEditTx(t); }}>
               <span>{fmtDate(t.date)} · {t.note || t.category}</span>
               <span className="mono" style={{ color: t.type === "income" ? COLORS.accent : COLORS.expense }}>
                 {t.type === "income" ? "+" : "-"}{fmtVND(t.amount)}
@@ -570,6 +619,7 @@ export default function App() {
   const [entryType, setEntryType] = useState("expense");
   const [txPeriod, setTxPeriod] = useState("month");
   const [reportView, setReportView] = useState("danhmuc");
+  const [reconcileAccId, setReconcileAccId] = useState("");
   const [dateBasis, setDateBasis] = useState("phatsinh");
   const [reportFrom, setReportFrom] = useState(firstDayThisMonth());
   const [reportTo, setReportTo] = useState(lastDayNextMonth());
@@ -585,7 +635,7 @@ export default function App() {
   const [newCatName, setNewCatName] = useState("");
   const [newVendorName, setNewVendorName] = useState("");
   const [newMemberName, setNewMemberName] = useState("");
-  const [newRecurring, setNewRecurring] = useState({ name: "", amount: "", category: "", accountId: "", startDate: todayISO(), repeatValue: 1, repeatUnit: "month", cycleCount: "", principal: "", isInstallment: false });
+  const [newRecurring, setNewRecurring] = useState({ name: "", amount: "", category: "", member: "", accountId: "", startDate: todayISO(), repeatValue: 1, repeatUnit: "month", cycleCount: "", principal: "", isInstallment: false });
   const [editingRecurringId, setEditingRecurringId] = useState(null);
   const [newBudget, setNewBudget] = useState({ category: "", limit: "" });
   
@@ -731,7 +781,11 @@ useEffect(() => {
   function resetEntryForm() {
     setEditingId(null);
     setEntryType("expense");
-    setForm({ date: todayISO(), amount: "", category: "", member: "", accountId: "", vendor: "", note: "", fromAccountId: "", toAccountId: "" });
+    setForm({
+      date: todayISO(), amount: "", category: "", member: members[0] || "",
+      accountId: accounts[0]?.id || "", vendor: "", note: "",
+      fromAccountId: accounts[0]?.id || "", toAccountId: accounts[1]?.id || accounts[0]?.id || "",
+    });
   }
 
   async function removeCategory(name, type) {
@@ -754,6 +808,59 @@ useEffect(() => {
     showToast("Đã xóa thành viên");
   }
 
+async function renameMember(oldName) {
+    const next = window.prompt("Sửa tên thành viên:", oldName);
+    if (!next || !next.trim() || next.trim() === oldName) return;
+    const name = next.trim();
+    if (members.includes(name)) { alert("Tên này đã tồn tại."); return; }
+
+    const { error } = await supabase.from("members").update({ name }).eq("name", oldName);
+    if (error) { console.error(error); return; }
+    await supabase.from("transactions").update({ member: name }).eq("member", oldName);
+    await supabase.from("recurring_items").update({ member: name }).eq("member", oldName);
+
+    setMembers(members.map((m) => (m === oldName ? name : m)));
+    setTxs(txs.map((t) => (t.member === oldName ? { ...t, member: name } : t)));
+    setRecurring(recurring.map((r) => (r.member === oldName ? { ...r, member: name } : r)));
+    showToast("Đã cập nhật thành viên");
+  }
+
+  async function renameCategory(oldName, type) {
+    const next = window.prompt("Sửa tên danh mục:", oldName);
+    if (!next || !next.trim() || next.trim() === oldName) return;
+    const name = next.trim();
+    const list = type === "income" ? incomeCats : expenseCats;
+    if (list.includes(name)) { alert("Tên này đã tồn tại."); return; }
+
+    const { error } = await supabase.from("categories").update({ name }).eq("name", oldName).eq("type", type);
+    if (error) { console.error(error); return; }
+    await supabase.from("transactions").update({ category: name }).eq("category", oldName).eq("type", type);
+    await supabase.from("recurring_items").update({ category: name }).eq("category", oldName);
+    await supabase.from("budgets").update({ category: name }).eq("category", oldName);
+
+    if (type === "income") setIncomeCats(incomeCats.map((c) => (c === oldName ? name : c)));
+    else setExpenseCats(expenseCats.map((c) => (c === oldName ? name : c)));
+    setTxs(txs.map((t) => (t.category === oldName && t.type === type ? { ...t, category: name } : t)));
+    setRecurring(recurring.map((r) => (r.category === oldName ? { ...r, category: name } : r)));
+    setBudgets(budgets.map((b) => (b.category === oldName ? { ...b, category: name } : b)));
+    showToast("Đã cập nhật danh mục");
+  }
+
+  async function renameVendor(oldName) {
+    const next = window.prompt("Sửa tên nhà cung cấp:", oldName);
+    if (!next || !next.trim() || next.trim() === oldName) return;
+    const name = next.trim();
+    if (vendors.includes(name)) { alert("Tên này đã tồn tại."); return; }
+
+    const { error } = await supabase.from("vendors").update({ name }).eq("name", oldName);
+    if (error) { console.error(error); return; }
+    await supabase.from("transactions").update({ vendor: name }).eq("vendor", oldName);
+
+    setVendors(vendors.map((v) => (v === oldName ? name : v)));
+    setTxs(txs.map((t) => (t.vendor === oldName ? { ...t, vendor: name } : t)));
+    showToast("Đã cập nhật nhà cung cấp");
+  }
+
 async function addCategory() {
   if (!newCatName.trim()) return;
   const { error } = await supabase.from("categories").insert({ name: newCatName.trim(), type: newCatType });
@@ -763,6 +870,7 @@ async function addCategory() {
   setNewCatName("");
   showToast("Đã thêm danh mục");
 }
+
 
 async function addVendor() {
   if (!newVendorName.trim()) return;
@@ -842,7 +950,7 @@ if (editingRecurringId) {
   showToast("Đã thêm khoản định kỳ");
 }
 setEditingRecurringId(null);
-setNewRecurring({ name: "", amount: "", category: expenseCats[0] || "", accountId: accounts[0]?.id || "", startDate: todayISO(), repeatValue: 1, repeatUnit: "month", cycleCount: "", principal: "", isInstallment: false });
+setNewRecurring({ name: "", amount: "", category: expenseCats[0] || "", member: members[0] || "", accountId: accounts[0]?.id || "", startDate: todayISO(), repeatValue: 1, repeatUnit: "month", cycleCount: "", principal: "", isInstallment: false });
 }
 
 function startEditRecurring(r) {
@@ -851,6 +959,7 @@ function startEditRecurring(r) {
     name: r.name,
     amount: String(r.amount || ""),
     category: r.category,
+    member: r.member || members[0] || "",
     accountId: r.accountId,
     startDate: r.startDate,
     repeatValue: r.repeatValue,
@@ -987,6 +1096,79 @@ async function toggleRecurringActive(r) {
     return bal;
   }, [txs, accounts]);
 
+const reconcile = useMemo(() => {
+    const creditAccounts = accounts.filter((a) => a.type === "credit");
+    const acc = accounts.find((a) => a.id === reconcileAccId) || creditAccounts[0];
+    if (!acc) return null;
+
+    const cutoff = lastStatementCutoff(acc);
+    const cutoffStr = toISODate(cutoff);
+    const dueDate = dueDateForCutoff(cutoff, acc);
+    const dueStr = toISODate(dueDate);
+    const prevCutoff = new Date(cutoff.getFullYear(), cutoff.getMonth() - 1, acc.statementDay);
+    const prevCutoffStr = toISODate(prevCutoff);
+    const todayStr = todayISO();
+
+    const balanceAsOf = (dateStr) => {
+      let bal = acc.openingBalance || 0;
+      txs.forEach((t) => {
+        if (t.date >= dateStr) return;
+        if (t.accountId === acc.id) {
+          if (t.type === "income") bal += t.amount;
+          if (t.type === "expense") bal -= t.amount;
+          if (t.type === "transfer") bal -= t.amount;
+        }
+        if (t.toAccountId === acc.id && t.type === "transfer") bal += t.amount;
+      });
+      return bal;
+    };
+
+    const txsInRange = (fromInclusiveStr, toExclusiveStr) => txs.filter((t) => {
+      if (!(t.date >= fromInclusiveStr && t.date < toExclusiveStr)) return false;
+      return t.accountId === acc.id || (t.toAccountId === acc.id && t.type === "transfer");
+    });
+
+    const toItem = (t) => {
+      const isPayment = (t.accountId === acc.id && t.type === "income") || (t.toAccountId === acc.id && t.type === "transfer");
+      return { label: `${fmtDate(t.date)} · ${t.note || t.vendor || t.category || "—"}`, amount: t.amount, sign: isPayment ? "-" : "+" };
+    };
+
+    const closingBalance = Math.max(0, -balanceAsOf(cutoffStr));
+    const cycleTxs = txsInRange(prevCutoffStr, cutoffStr);
+
+    const paymentsAfterClosingTxs = txsInRange(cutoffStr, toISODate(new Date(dueDate.getFullYear(), dueDate.getMonth(), dueDate.getDate() + 1))).filter((t) =>
+    (t.accountId === acc.id && t.type === "income") || (t.toAccountId === acc.id && t.type === "transfer")
+    );
+    const paymentsAfterClosing = paymentsAfterClosingTxs.reduce((s, t) => s + t.amount, 0);
+    const tbgdRemaining = Math.max(0, closingBalance - paymentsAfterClosing);
+
+    const currentBalance = Math.max(0, -(balances[acc.id] || 0));
+    const currentTxs = txsInRange(prevCutoffStr, toISODate(new Date(new Date(todayStr).getFullYear(), new Date(todayStr).getMonth(), new Date(todayStr).getDate() + 1)));
+
+    const installmentBalance = installmentReserved[acc.id] || 0;
+    const installmentItems = recurring
+      .filter((r) => r.isInstallment && r.accountId === acc.id && r.principal)
+      .map((r) => {
+        const paid = r.doneCount * r.amount;
+        const remaining = Math.max(0, r.principal - paid);
+        const left = Math.max(0, (r.cycleCount || 0) - r.doneCount);
+        return { label: `${r.name} (còn ${left} kỳ)`, amount: remaining, sign: "+" };
+      })
+      .filter((it) => it.amount > 0);
+
+    const available = (acc.creditLimit || 0) - currentBalance - installmentBalance;
+
+    return {
+      acc, cutoff, dueDate,
+      closingBalance, cycleItems: cycleTxs.map(toItem),
+      tbgdRemaining, tbgdItems: [...cycleTxs.map(toItem), ...paymentsAfterClosingTxs.map(toItem)],
+      currentBalance, currentItems: currentTxs.map(toItem),
+      installmentBalance, installmentItems,
+      available,
+      duePayment: closingBalance,
+    };
+  }, [reconcileAccId, accounts, txs, balances, installmentReserved, recurring]);
+
   const netWorth = useMemo(() => accounts.filter((a) => a.includeNetWorth).reduce((s, a) => s + (balances[a.id] || 0), 0), [accounts, balances]);
   const liabilities = useMemo(() => accounts.filter((a) => a.type === "credit" || a.type === "payable").reduce((s, a) => s + Math.max(0, -(balances[a.id] || 0)), 0), [accounts, balances]);
 
@@ -1034,8 +1216,9 @@ async function toggleRecurringActive(r) {
   const byMember = useMemo(() => {
     const g = {};
     filteredTxs.filter((t) => t.type !== "transfer").forEach((t) => {
-      g[t.member] = g[t.member] || { income: 0, expense: 0 };
-      g[t.member][t.type] += t.amount;
+      const key = t.member || "Chưa gán thành viên";
+      g[key] = g[key] || { income: 0, expense: 0 };
+      g[key][t.type] += t.amount;
     });
     return g;
   }, [filteredTxs]);
@@ -1084,6 +1267,21 @@ async function toggleRecurringActive(r) {
         return matchText || matchAmount;
       });
     }, [txs, txPeriod, searchQuery]);
+
+  const recentListByDate = useMemo(() => {
+    const groups = [];
+    const map = {};
+    recentList.forEach((t) => {
+      if (!map[t.date]) {
+        map[t.date] = { date: t.date, txs: [], income: 0, expense: 0 };
+        groups.push(map[t.date]);
+      }
+      map[t.date].txs.push(t);
+      if (t.type === "income") map[t.date].income += t.amount;
+      if (t.type === "expense") map[t.date].expense += t.amount;
+    });
+    return groups;
+  }, [recentList]);
 
   const inputStyle = `
   * { box-sizing: border-box; }
@@ -1192,34 +1390,44 @@ async function toggleRecurringActive(r) {
           </div>
         </div>
 
-        <div>
-          {recentList.map((t) => {
-            const acc = accById(t.accountId);
-            const color = t.type === "income" ? COLORS.accent : t.type === "transfer" ? COLORS.transfer : COLORS.expense;
-            const sign = t.type === "income" ? "+" : t.type === "transfer" ? "" : "-";
-            return (
-              <div key={t.id} className="ledger-line py-3 flex items-center justify-between" style={{ gap: 12, cursor: "pointer" }} onClick={() => setDetailTx(t)}>
-                <div className="flex items-center gap-3" style={{ minWidth: 0, flex: 1 }}>
-                  <div style={{ color: COLORS.textMuted, flexShrink: 0 }}><AccIcon type={acc?.type} /></div>
-                  <div style={{ minWidth: 0 }}>
-                    <p className="sans text-sm" style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                      {t.note || t.category || (t.type === "transfer" ? "Chuyển khoản" : "")}
-                    </p>
-                    <p className="sans text-xs" style={{ color: COLORS.textMuted, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                      {t.type === "transfer" ? `${acc?.name} → ${accById(t.toAccountId)?.name}` : `${t.category}${t.vendor ? " · " + t.vendor : ""}`} · {fmtDate(t.date)}
-                    </p>
-                  </div>
-                </div>
-                <div className="flex flex-col items-end gap-1" style={{ flexShrink: 0 }}>
-                  <span className="mono text-sm" style={{ color }}>{sign}{fmtVND(t.amount)}</span>
-                  <div className="flex items-center gap-3">
-                    <button onClick={(e) => { e.stopPropagation(); startEditTx(t); }} style={{ color: COLORS.textMuted }}><Pencil size={14} /></button>
-                    <button onClick={(e) => { e.stopPropagation(); removeTx(t.id); }} style={{ color: COLORS.textMuted }}><Trash2 size={14} /></button>
-                  </div>
-                </div>
+        <div className="space-y-3">
+  {recentListByDate.map((day) => (
+    <div key={day.date} className="rounded-lg" style={{ background: COLORS.surface2, border: "1px solid " + COLORS.border, overflow: "hidden" }}>
+      <div className="flex items-center justify-between sans" style={{ padding: "6px 12px", background: COLORS.surface, fontSize: 11, color: COLORS.textMuted }}>
+        <span>{fmtDateWithWeekday(day.date)}</span>
+        <span className="mono flex items-center gap-2">
+          <span style={{ color: COLORS.accent }}>+{fmtVND(day.income)}</span>
+          <span style={{ color: COLORS.expense }}>-{fmtVND(day.expense)}</span>
+        </span>
+        </div>
+            <div style={{ padding: "0 12px" }}>
+                {day.txs.map((t) => {
+                  const acc = accById(t.accountId);
+                  const color = t.type === "income" ? COLORS.accent : t.type === "transfer" ? COLORS.transfer : COLORS.expense;
+                  const sign = t.type === "income" ? "+" : t.type === "transfer" ? "" : "-";
+                  return (
+                    <div key={t.id} className="ledger-line py-3 flex items-center justify-between" style={{ gap: 12, cursor: "pointer" }} onClick={() => setDetailTx(t)}>
+                      <div className="flex items-center gap-3" style={{ minWidth: 0, flex: 1 }}>
+                        <div style={{ color: COLORS.textMuted, flexShrink: 0 }}><AccIcon type={acc?.type} /></div>
+                        <div style={{ minWidth: 0 }}>
+                          <p className="sans text-sm" style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                            {t.note || t.category || (t.type === "transfer" ? "Chuyển khoản" : "")}
+                          </p>
+                          <p className="sans text-xs" style={{ color: COLORS.textMuted, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                            {t.type === "transfer" ? `${acc?.name} → ${accById(t.toAccountId)?.name}` : `${t.category}${t.vendor ? " · " + t.vendor : ""}`}
+                          </p>
+                        </div>
+                      </div>
+                      <div className="flex flex-col items-end gap-1" style={{ flexShrink: 0 }}>
+                        <span className="mono text-sm" style={{ color }}>{sign}{fmtVND(t.amount)}</span>
+                        <span className="sans text-xs" style={{ color: COLORS.textMuted }}>{acc?.name}</span>
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
-            );
-          })}
+            </div>
+          ))}
           {recentList.length === 0 && <p className="sans text-xs" style={{ color: COLORS.textMuted }}>Không có giao dịch trong khoảng này.</p>}
         </div>
       </div>
@@ -1250,6 +1458,7 @@ async function toggleRecurringActive(r) {
             { v: "taikhoan", l: "Theo tài khoản" },
             { v: "thanhvien", l: "Theo thành viên" },
             { v: "tonghop", l: "Tổng hợp tháng" },
+            { v: "doichieu", l: "Đối chiếu sao kê" },
           ].map((o) => <Chip key={o.v} label={o.l} active={reportView === o.v} onClick={() => setReportView(o.v)} />)}
         </div>
         
@@ -1260,7 +1469,7 @@ async function toggleRecurringActive(r) {
                 {Object.entries(byCategory.exp).sort((a, b) => b[1] - a[1]).map(([cat, amt]) => {
                   const max = Math.max(...Object.values(byCategory.exp));
                   const txList = filteredTxs.filter((t) => t.type === "expense" && t.category === cat);
-                  return <CategoryRow key={cat} label={cat} amount={amt} max={max} color={COLORS.expense} txList={txList} />;
+                  return <CategoryRow key={cat} label={cat} amount={amt} max={max} color={COLORS.expense} txList={txList} onEditTx={startEditTx} />;
                 })}
                 {pieExpense.length === 0 && <p className="sans text-xs" style={{ color: COLORS.textMuted }}>Không có dữ liệu trong khoảng ngày đã chọn.</p>}
               </div>
@@ -1269,7 +1478,7 @@ async function toggleRecurringActive(r) {
                 {Object.entries(byCategory.inc).sort((a, b) => b[1] - a[1]).map(([cat, amt]) => {
                   const max = Math.max(...Object.values(byCategory.inc));
                   const txList = filteredTxs.filter((t) => t.type === "income" && t.category === cat);
-                  return <CategoryRow key={cat} label={cat} amount={amt} max={max} color={COLORS.accent} txList={txList} />;
+                 return <CategoryRow key={cat} label={cat} amount={amt} max={max} color={COLORS.expense} txList={txList} onEditTx={startEditTx} />;
                 })}
               </div>
             </div>
@@ -1367,7 +1576,7 @@ async function toggleRecurringActive(r) {
               {accounts.map((a) => {
                 const d = byAccount[a.id] || { income: 0, expense: 0 };
                 const txList = filteredTxs.filter((t) => t.accountId === a.id || t.toAccountId === a.id);
-                return <AccountReportCard key={a.id} account={a} data={d} balance={balances[a.id] || 0} txList={txList} />;
+                return <AccountReportCard key={a.id} account={a} data={d} balance={balances[a.id] || 0} txList={txList} onEditTx={startEditTx} />;
               })}
             </div>
           )}
@@ -1375,8 +1584,8 @@ async function toggleRecurringActive(r) {
           {reportView === "thanhvien" && (
             <div className="space-y-2">
               {Object.entries(byMember).map(([m, d]) => {
-                const txList = filteredTxs.filter((t) => t.type !== "transfer" && t.member === m);
-                return <MemberReportCard key={m} member={m} data={d} txList={txList} />;
+                const txList = filteredTxs.filter((t) => t.type !== "transfer" && (t.member || "Chưa gán thành viên") === m);
+                return <MemberReportCard key={m} member={m} data={d} txList={txList} onEditTx={startEditTx} />;
               })}
             </div>
           )}
@@ -1387,7 +1596,7 @@ async function toggleRecurringActive(r) {
               {Object.entries(byVendor).sort((a, b) => b[1] - a[1]).map(([ven, amt]) => {
                 const max = Math.max(...Object.values(byVendor));
                 const txList = filteredTxs.filter((t) => t.type === "expense" && t.vendor === ven);
-                return <CategoryRow key={ven} label={ven} amount={amt} max={max} color={COLORS.expense} txList={txList} />;
+                return <CategoryRow key={ven} label={ven} amount={amt} max={max} color={COLORS.expense} txList={txList} onEditTx={startEditTx} />;
               })}
               {Object.keys(byVendor).length === 0 && <p className="sans text-xs" style={{ color: COLORS.textMuted }}>Không có dữ liệu NCC trong khoảng ngày đã chọn.</p>}
             </div>
@@ -1397,8 +1606,50 @@ async function toggleRecurringActive(r) {
             <div className="space-y-4">
               {monthlyTotals.map(([key, d]) => {
                 const txList = filteredTxs.filter((t) => t.type !== "transfer" && monthKey(effDate(t)) === key);
-                return <MonthReportCard key={key} monthKeyStr={key} data={d} txList={txList} />;
+                return <MonthReportCard key={key} monthKeyStr={key} data={d} txList={txList} onEditTx={startEditTx} />;
               })}
+            </div>
+          )}
+
+          {reportView === "doichieu" && (
+            <div className="space-y-4">
+              {accounts.filter((a) => a.type === "credit").length === 0 ? (
+                <p className="sans text-xs" style={{ color: COLORS.textMuted }}>Chưa có thẻ tín dụng nào — thêm trong Cài đặt.</p>
+              ) : (
+                <>
+                  <div>
+                    <label className="lbl">Thẻ tín dụng</label>
+                    <select
+                      value={reconcileAccId || accounts.find((a) => a.type === "credit")?.id || ""}
+                      onChange={(e) => setReconcileAccId(e.target.value)}
+                    >
+                      {accounts.filter((a) => a.type === "credit").map((a) => (
+                        <option key={a.id} value={a.id}>{a.name}</option>
+                      ))}
+                    </select>
+                  </div>
+
+                  {reconcile && (
+                    <div className="space-y-2">
+                      <p className="sans text-xs" style={{ color: COLORS.textMuted }}>
+                        Kỳ sao kê chốt ngày {pad(reconcile.cutoff.getDate())}/{pad(reconcile.cutoff.getMonth() + 1)}/{reconcile.cutoff.getFullYear()}
+                        {" · "}Hạn thanh toán {pad(reconcile.dueDate.getDate())}/{pad(reconcile.dueDate.getMonth() + 1)}/{reconcile.dueDate.getFullYear()}
+                      </p>
+
+                      <ReconcileRow label="Dư nợ cuối kỳ" value={reconcile.closingBalance} items={reconcile.cycleItems} />
+                      <ReconcileRow label="Dư nợ TBGD còn lại" value={reconcile.tbgdRemaining} items={reconcile.tbgdItems} />
+                      <ReconcileRow label="Dư nợ hiện tại" value={reconcile.currentBalance} items={reconcile.currentItems} />
+                      <ReconcileRow label="Dư nợ trả góp" value={reconcile.installmentBalance} items={reconcile.installmentItems} />
+                      <ReconcileRow label="Số dư khả dụng" value={reconcile.available} items={null} />
+                      <ReconcileRow
+                        label={`Số phải thanh toán kỳ này (trước ${pad(reconcile.dueDate.getDate())}/${pad(reconcile.dueDate.getMonth() + 1)})`}
+                        value={reconcile.duePayment}
+                        items={reconcile.cycleItems}
+                      />
+                    </div>
+                  )}
+                </>
+              )}
             </div>
           )}
         </div>
@@ -1554,7 +1805,7 @@ async function toggleRecurringActive(r) {
         <div className="px-5 pt-5 space-y-7">
           <Section title="Thành viên" accent>
             <div className="flex flex-wrap gap-2 mb-2">
-              {members.map((m) => <Chip key={m} label={m} onRemove={() => removeMember(m)} />)}
+              {members.map((m) => <Chip key={m} label={m} onClick={() => renameMember(m)} onRemove={() => removeMember(m)} />)}
             </div>
             <div className="flex gap-2">
               <input placeholder="Thêm thành viên" value={newMemberName} onChange={(e) => setNewMemberName(e.target.value)} />
@@ -1570,7 +1821,7 @@ async function toggleRecurringActive(r) {
             </div>
             <div className="flex flex-wrap gap-2 mb-2">
               {(newCatType === "income" ? incomeCats : expenseCats).map((c) => (
-                <Chip key={c} label={c} onRemove={() => newCatType === "income" ? removeCategory(c, "income") : removeCategory(c, "expense")} />
+                <Chip key={c} label={c} onClick={() => renameCategory(c, newCatType)} onRemove={() => newCatType === "income" ? removeCategory(c, "income") : removeCategory(c, "expense")} />
               ))}
             </div>
             <div className="flex gap-2">
@@ -1581,7 +1832,7 @@ async function toggleRecurringActive(r) {
 
           <Section title="Nhà cung cấp / nơi mua (NCC)" accent>
             <div className="flex flex-wrap gap-2 mb-2">
-              {vendors.map((v) => <Chip key={v} label={v} onRemove={() => removeVendor(v)} />)}
+              {vendors.map((v) => <Chip key={v} label={v} onClick={() => renameVendor(v)} onRemove={() => removeVendor(v)} />)}
             </div>
             <div className="flex gap-2">
               <input placeholder="Thêm NCC" value={newVendorName} onChange={(e) => setNewVendorName(e.target.value)} />
@@ -1661,6 +1912,11 @@ async function toggleRecurringActive(r) {
                   {accounts.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
                 </select>
               </div>
+              <div><label className="lbl">Thành viên</label>
+                <select value={newRecurring.member} onChange={(e) => setNewRecurring({ ...newRecurring, member: e.target.value })}>
+                  {members.map((m) => <option key={m} value={m}>{m}</option>)}
+                </select>
+              </div>
 
               <div>
                 <label className="lbl">
@@ -1699,7 +1955,7 @@ async function toggleRecurringActive(r) {
                 <button
                   onClick={() => {
                     setEditingRecurringId(null);
-                    setNewRecurring({ name: "", amount: "", category: expenseCats[0] || "", accountId: accounts[0]?.id || "", startDate: todayISO(), repeatValue: 1, repeatUnit: "month", cycleCount: "", principal: "", isInstallment: false });
+                    setNewRecurring({ name: "", amount: "", category: expenseCats[0] || "", member: members[0] || "", accountId: accounts[0]?.id || "", startDate: todayISO(), repeatValue: 1, repeatUnit: "month", cycleCount: "", principal: "", isInstallment: false });
                   }}
                   className="w-full py-2 rounded-md sans text-xs"
                   style={{ border: "1px solid " + COLORS.border, color: COLORS.textMuted }}
