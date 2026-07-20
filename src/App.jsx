@@ -426,7 +426,7 @@ function MetricCard({ label, value, color }) {
     );
   }
 
-function ReconcileRow({ label, value, items }) {
+function ReconcileRow({ label, value, items, onSelectTx }) {
   const [open, setOpen] = useState(false);
   return (
     <div className="rounded-lg p-3" style={{ background: COLORS.surface, border: "1px solid " + COLORS.border, cursor: items ? "pointer" : "default" }} onClick={() => items && setOpen(!open)}>
@@ -437,7 +437,12 @@ function ReconcileRow({ label, value, items }) {
       {open && items && (
         <div className="mt-2 space-y-1" style={{ borderTop: "1px solid " + COLORS.border, paddingTop: 8 }}>
           {items.map((it, i) => (
-            <div key={i} className="flex justify-between sans text-xs" style={{ color: COLORS.textMuted }}>
+            <div
+              key={i}
+              className="flex justify-between sans text-xs"
+              style={{ color: COLORS.textMuted, cursor: it.tx ? "pointer" : "default" }}
+              onClick={(e) => { e.stopPropagation(); it.tx && onSelectTx && onSelectTx(it.tx); }}
+            >
               <span>{it.label}</span>
               <span className="mono" style={{ color: it.sign === "-" ? COLORS.accent : COLORS.textMuted }}>{it.sign === "-" ? "− " : "+ "}{fmtVND(it.amount)}</span>
             </div>
@@ -1130,7 +1135,7 @@ const reconcile = useMemo(() => {
 
     const toItem = (t) => {
       const isPayment = (t.accountId === acc.id && t.type === "income") || (t.toAccountId === acc.id && t.type === "transfer");
-      return { label: `${fmtDate(t.date)} · ${t.note || t.vendor || t.category || "—"}`, amount: t.amount, sign: isPayment ? "-" : "+" };
+      return { label: `${fmtDate(t.date)} · ${t.note || t.vendor || t.category || "—"}`, amount: t.amount, sign: isPayment ? "-" : "+", tx: t };
     };
 
     const closingBalance = Math.max(0, -balanceAsOf(cutoffStr));
@@ -1640,15 +1645,16 @@ const reconcile = useMemo(() => {
                         {" · "}Hạn thanh toán {pad(reconcile.dueDate.getDate())}/{pad(reconcile.dueDate.getMonth() + 1)}/{reconcile.dueDate.getFullYear()}
                       </p>
 
-                      <ReconcileRow label="Dư nợ cuối kỳ" value={reconcile.closingBalance} items={reconcile.cycleItems} />
-                      <ReconcileRow label="Dư nợ TBGD còn lại" value={reconcile.tbgdRemaining} items={reconcile.tbgdItems} />
-                      <ReconcileRow label="Dư nợ hiện tại" value={reconcile.currentBalance} items={reconcile.currentItems} />
-                      <ReconcileRow label="Dư nợ trả góp" value={reconcile.installmentBalance} items={reconcile.installmentItems} />
+                      <ReconcileRow label="Dư nợ cuối kỳ" value={reconcile.closingBalance} items={reconcile.cycleItems} onSelectTx={setDetailTx} />
+                      <ReconcileRow label="Dư nợ TBGD còn lại" value={reconcile.tbgdRemaining} items={reconcile.tbgdItems} onSelectTx={setDetailTx} />
+                      <ReconcileRow label="Dư nợ hiện tại" value={reconcile.currentBalance} items={reconcile.currentItems} onSelectTx={setDetailTx} />
+                      <ReconcileRow label="Dư nợ trả góp" value={reconcile.installmentBalance} items={reconcile.installmentItems} onSelectTx={setDetailTx} />
                       <ReconcileRow label="Số dư khả dụng" value={reconcile.available} items={null} />
                       <ReconcileRow
                         label={`Số phải thanh toán kỳ này (trước ${pad(reconcile.dueDate.getDate())}/${pad(reconcile.dueDate.getMonth() + 1)})`}
                         value={reconcile.duePayment}
                         items={reconcile.cycleItems}
+                        onSelectTx={setDetailTx}
                       />
                     </div>
                   )}
