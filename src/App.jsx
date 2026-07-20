@@ -1304,6 +1304,10 @@ const reconcile = useMemo(() => {
     background-position: right 12px center;
     padding-right: 32px;
   }
+  select option {
+    background: ${COLORS.surface2};
+    color: ${COLORS.textPrimary};
+  }
 
   input[type="date"] {
     width: 100%;
@@ -1469,7 +1473,7 @@ const reconcile = useMemo(() => {
                 {Object.entries(byCategory.exp).sort((a, b) => b[1] - a[1]).map(([cat, amt]) => {
                   const max = Math.max(...Object.values(byCategory.exp));
                   const txList = filteredTxs.filter((t) => t.type === "expense" && t.category === cat);
-                  return <CategoryRow key={cat} label={cat} amount={amt} max={max} color={COLORS.expense} txList={txList} onEditTx={startEditTx} />;
+                  return <CategoryRow key={cat} label={cat} amount={amt} max={max} color={COLORS.expense} txList={txList} onEditTx={setDetailTx} />;
                 })}
                 {pieExpense.length === 0 && <p className="sans text-xs" style={{ color: COLORS.textMuted }}>Không có dữ liệu trong khoảng ngày đã chọn.</p>}
               </div>
@@ -1478,7 +1482,7 @@ const reconcile = useMemo(() => {
                 {Object.entries(byCategory.inc).sort((a, b) => b[1] - a[1]).map(([cat, amt]) => {
                   const max = Math.max(...Object.values(byCategory.inc));
                   const txList = filteredTxs.filter((t) => t.type === "income" && t.category === cat);
-                 return <CategoryRow key={cat} label={cat} amount={amt} max={max} color={COLORS.expense} txList={txList} onEditTx={startEditTx} />;
+                 return <CategoryRow key={cat} label={cat} amount={amt} max={max} color={COLORS.expense} txList={txList} onEditTx={setDetailTx} />;
                 })}
               </div>
             </div>
@@ -1576,7 +1580,7 @@ const reconcile = useMemo(() => {
               {accounts.map((a) => {
                 const d = byAccount[a.id] || { income: 0, expense: 0 };
                 const txList = filteredTxs.filter((t) => t.accountId === a.id || t.toAccountId === a.id);
-                return <AccountReportCard key={a.id} account={a} data={d} balance={balances[a.id] || 0} txList={txList} onEditTx={startEditTx} />;
+                return <AccountReportCard key={a.id} account={a} data={d} balance={balances[a.id] || 0} txList={txList} onEditTx={setDetailTx} />;
               })}
             </div>
           )}
@@ -1585,7 +1589,7 @@ const reconcile = useMemo(() => {
             <div className="space-y-2">
               {Object.entries(byMember).map(([m, d]) => {
                 const txList = filteredTxs.filter((t) => t.type !== "transfer" && (t.member || "Chưa gán thành viên") === m);
-                return <MemberReportCard key={m} member={m} data={d} txList={txList} onEditTx={startEditTx} />;
+                return <MemberReportCard key={m} member={m} data={d} txList={txList} onEditTx={setDetailTx} />;
               })}
             </div>
           )}
@@ -1596,7 +1600,7 @@ const reconcile = useMemo(() => {
               {Object.entries(byVendor).sort((a, b) => b[1] - a[1]).map(([ven, amt]) => {
                 const max = Math.max(...Object.values(byVendor));
                 const txList = filteredTxs.filter((t) => t.type === "expense" && t.vendor === ven);
-                return <CategoryRow key={ven} label={ven} amount={amt} max={max} color={COLORS.expense} txList={txList} onEditTx={startEditTx} />;
+                return <CategoryRow key={ven} label={ven} amount={amt} max={max} color={COLORS.expense} txList={txList} onEditTx={setDetailTx} />;
               })}
               {Object.keys(byVendor).length === 0 && <p className="sans text-xs" style={{ color: COLORS.textMuted }}>Không có dữ liệu NCC trong khoảng ngày đã chọn.</p>}
             </div>
@@ -1606,7 +1610,7 @@ const reconcile = useMemo(() => {
             <div className="space-y-4">
               {monthlyTotals.map(([key, d]) => {
                 const txList = filteredTxs.filter((t) => t.type !== "transfer" && monthKey(effDate(t)) === key);
-                return <MonthReportCard key={key} monthKeyStr={key} data={d} txList={txList} onEditTx={startEditTx} />;
+                return <MonthReportCard key={key} monthKeyStr={key} data={d} txList={txList} onEditTx={setDetailTx} />;
               })}
             </div>
           )}
