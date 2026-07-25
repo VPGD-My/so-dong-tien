@@ -625,6 +625,8 @@ export default function App() {
   const [txPeriod, setTxPeriod] = useState("month");
   const [reportView, setReportView] = useState("danhmuc");
   const [reconcileAccId, setReconcileAccId] = useState("");
+  const [selectedExpenseCat, setSelectedExpenseCat] = useState(null);
+  const [selectedIncomeCat, setSelectedIncomeCat] = useState(null);
   const [dateBasis, setDateBasis] = useState("phatsinh");
   const [reportFrom, setReportFrom] = useState(firstDayThisMonth());
   const [reportTo, setReportTo] = useState(lastDayNextMonth());
@@ -1089,7 +1091,7 @@ async function toggleRecurringActive(r) {
 
   const balances = useMemo(() => {
     const bal = {};
-    accounts.forEach((a) => (bal[a.id] = a.openingBalance || 0));  // ← đổi từ 0 thành a.openingBalance
+    accounts.forEach((a) => (bal[a.id] = a.type === "payable" ? -(a.openingBalance || 0) : (a.openingBalance || 0))); // payable: số dư đầu kỳ là khoản phải trả nên tính âm
     txs.forEach((t) => {
       if (t.type === "income") bal[t.accountId] = (bal[t.accountId] || 0) + t.amount;
       if (t.type === "expense") bal[t.accountId] = (bal[t.accountId] || 0) - t.amount;
@@ -1498,7 +1500,7 @@ const reconcile = useMemo(() => {
               <div>
                 <p className="sans text-xs mb-1" style={{ color: COLORS.textSecondary }}>Tỷ trọng chi tiêu</p>
                 {pieExpense.length > 0 ? (
-                  <div style={{ height: 260 }}>
+                  <div style={{ height: 260, position: "relative" }}>
                     <ResponsiveContainer width="100%" height="100%">
                       <PieChart>
                         <Pie
@@ -1506,74 +1508,145 @@ const reconcile = useMemo(() => {
                           dataKey="value"
                           nameKey="name"
                           innerRadius={50}
-                          outerRadius={80}
+                          outerRadius={({ name }) => (selectedExpenseCat === name ? 86 : 80)}
                           paddingAngle={2}
-                          label={({ cx, cy, midAngle, innerRadius, outerRadius, percent, index }) => {
+                          onClick={(d) => setSelectedExpenseCat((prev) => (prev === d.name ? null : d.name))}
+                          label={({ cx, cy, midAngle, innerRadius, outerRadius, percent, name, index }) => {
                             const RADIAN = Math.PI / 180;
                             const radius = innerRadius + (outerRadius - innerRadius) * 1.3;
                             const x = cx + radius * Math.cos(-midAngle * RADIAN);
                             const y = cy + radius * Math.sin(-midAngle * RADIAN);
+                            const dim = selectedExpenseCat && selectedExpenseCat !== name;
                             return (
-                              <text x={x} y={y} fill={PIE_COLORS[index % PIE_COLORS.length]} textAnchor={x > cx ? "start" : "end"} dominantBaseline="central" fontSize={12}>
+                              <text x={x} y={y} fill={dim ? COLORS.textMuted : PIE_COLORS[index % PIE_COLORS.length]} textAnchor={x > cx ? "start" : "end"} dominantBaseline="central" fontSize={12}>
                                 {`${(percent * 100).toFixed(0)}%`}
                               </text>
                             );
                           }}
                           labelLine={false}
                         >
-                          {pieExpense.map((_, i) => <Cell key={i} fill={PIE_COLORS[i % PIE_COLORS.length]} />)}
+                          {pieExpense.map((d, i) => (
+                            <Cell
+                              key={d.name}
+                              fill={PIE_COLORS[i % PIE_COLORS.length]}
+                              opacity={selectedExpenseCat && selectedExpenseCat !== d.name ? 0.3 : 1}
+                              style={{ cursor: "pointer" }}
+                            />
+                          ))}
                         </Pie>
                         <Tooltip
-                          formatter={(v, n, props) => {
+                          formatter={(v, n) => {
                             const total = pieExpense.reduce((s, d) => s + d.value, 0);
                             return [`${fmtVND(v)} (${((v / total) * 100).toFixed(1)}%)`, n];
                           }}
                           contentStyle={{ background: COLORS.surface, border: "1px solid " + COLORS.border, fontSize: 12 }}
                         />
-                        <Legend wrapperStyle={{ fontSize: 11, color: COLORS.textSecondary }} />
+                        <Legend
+                          onClick={(e) => setSelectedExpenseCat((prev) => (prev === e.value ? null : e.value))}
+                          payload={pieExpense.map((d, i) => ({
+                            value: d.name,
+                            type: "square",
+                            color: PIE_COLORS[i % PIE_COLORS.length],
+                            id: d.name,
+                          }))}
+                          formatter={(value) => (
+                            <span style={{ color: selectedExpenseCat === value ? COLORS.cream : COLORS.textSecondary, fontWeight: selectedExpenseCat === value ? 700 : 400 }}>
+                              {value}
+                            </span>
+                          )}
+                          wrapperStyle={{ fontSize: 11, cursor: "pointer" }}
+                        />
                       </PieChart>
                     </ResponsiveContainer>
+                    {selectedExpenseCat && (() => {
+                      const d = pieExpense.find((x) => x.name === selectedExpenseCat);
+                      const total = pieExpense.reduce((s, x) => s + x.value, 0);
+                      if (!d) return null;
+                      return (
+                        <div style={{ position: "absolute", top: "38%", left: "50%", transform: "translate(-50%, -50%)", textAlign: "center", pointerEvents: "none" }}>
+                          <p className="sans text-xs" style={{ color: COLORS.textSecondary, maxWidth: 110, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{d.name}</p>
+                          <p className="mono text-sm" style={{ color: COLORS.cream, fontWeight: 700 }}>{fmtVND(d.value)}</p>
+                          <p className="sans text-xs" style={{ color: COLORS.textMuted }}>{((d.value / total) * 100).toFixed(1)}%</p>
+                        </div>
+                      );
+                    })()}
                   </div>
                 ) : <p className="sans text-xs" style={{ color: COLORS.textMuted }}>Không có dữ liệu.</p>}
               </div>
+
               <div>
                 <p className="sans text-xs mb-1" style={{ color: COLORS.textSecondary }}>Tỷ trọng thu nhập</p>
                 {pieIncome.length > 0 ? (
-                  <div style={{ height: 260 }}>
+                  <div style={{ height: 260, position: "relative" }}>
                     <ResponsiveContainer width="100%" height="100%">
                       <PieChart>
-                                 <Pie
+                        <Pie
                           data={pieIncome}
                           dataKey="value"
                           nameKey="name"
                           innerRadius={50}
-                          outerRadius={80}
+                          outerRadius={({ name }) => (selectedIncomeCat === name ? 86 : 80)}
                           paddingAngle={2}
-                          label={({ cx, cy, midAngle, innerRadius, outerRadius, percent, index }) => {
+                          onClick={(d) => setSelectedIncomeCat((prev) => (prev === d.name ? null : d.name))}
+                          label={({ cx, cy, midAngle, innerRadius, outerRadius, percent, name, index }) => {
                             const RADIAN = Math.PI / 180;
                             const radius = innerRadius + (outerRadius - innerRadius) * 1.3;
                             const x = cx + radius * Math.cos(-midAngle * RADIAN);
                             const y = cy + radius * Math.sin(-midAngle * RADIAN);
+                            const dim = selectedIncomeCat && selectedIncomeCat !== name;
                             return (
-                              <text x={x} y={y} fill={PIE_COLORS[index % PIE_COLORS.length]} textAnchor={x > cx ? "start" : "end"} dominantBaseline="central" fontSize={12}>
+                              <text x={x} y={y} fill={dim ? COLORS.textMuted : PIE_COLORS[index % PIE_COLORS.length]} textAnchor={x > cx ? "start" : "end"} dominantBaseline="central" fontSize={12}>
                                 {`${(percent * 100).toFixed(0)}%`}
                               </text>
                             );
                           }}
                           labelLine={false}
                         >
-                          {pieIncome.map((_, i) => <Cell key={i} fill={PIE_COLORS[i % PIE_COLORS.length]} />)}
+                          {pieIncome.map((d, i) => (
+                            <Cell
+                              key={d.name}
+                              fill={PIE_COLORS[i % PIE_COLORS.length]}
+                              opacity={selectedIncomeCat && selectedIncomeCat !== d.name ? 0.3 : 1}
+                              style={{ cursor: "pointer" }}
+                            />
+                          ))}
                         </Pie>
                         <Tooltip
-                          formatter={(v, n, props) => {
-                            const total = pieExpense.reduce((s, d) => s + d.value, 0);
+                          formatter={(v, n) => {
+                            const total = pieIncome.reduce((s, d) => s + d.value, 0);
                             return [`${fmtVND(v)} (${((v / total) * 100).toFixed(1)}%)`, n];
                           }}
                           contentStyle={{ background: COLORS.surface, border: "1px solid " + COLORS.border, fontSize: 12 }}
                         />
-                        <Legend wrapperStyle={{ fontSize: 11, color: COLORS.textSecondary }} />
+                        <Legend
+                          onClick={(e) => setSelectedIncomeCat((prev) => (prev === e.value ? null : e.value))}
+                          payload={pieIncome.map((d, i) => ({
+                            value: d.name,
+                            type: "square",
+                            color: PIE_COLORS[i % PIE_COLORS.length],
+                            id: d.name,
+                          }))}
+                          formatter={(value) => (
+                            <span style={{ color: selectedIncomeCat === value ? COLORS.cream : COLORS.textSecondary, fontWeight: selectedIncomeCat === value ? 700 : 400 }}>
+                              {value}
+                            </span>
+                          )}
+                          wrapperStyle={{ fontSize: 11, cursor: "pointer" }}
+                        />
                       </PieChart>
                     </ResponsiveContainer>
+                    {selectedIncomeCat && (() => {
+                      const d = pieIncome.find((x) => x.name === selectedIncomeCat);
+                      const total = pieIncome.reduce((s, x) => s + x.value, 0);
+                      if (!d) return null;
+                      return (
+                        <div style={{ position: "absolute", top: "38%", left: "50%", transform: "translate(-50%, -50%)", textAlign: "center", pointerEvents: "none" }}>
+                          <p className="sans text-xs" style={{ color: COLORS.textSecondary, maxWidth: 110, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{d.name}</p>
+                          <p className="mono text-sm" style={{ color: COLORS.cream, fontWeight: 700 }}>{fmtVND(d.value)}</p>
+                          <p className="sans text-xs" style={{ color: COLORS.textMuted }}>{((d.value / total) * 100).toFixed(1)}%</p>
+                        </div>
+                      );
+                    })()}
                   </div>
                 ) : <p className="sans text-xs" style={{ color: COLORS.textMuted }}>Không có dữ liệu.</p>}
               </div>
