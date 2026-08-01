@@ -280,7 +280,15 @@ function formatExprDisplay(expr) {
     .replace(/\*/g, "×")
     .replace(/\//g, "÷")
     .replace(/-/g, "−")
-    .replace(/\d+/g, (m) => Number(m).toLocaleString("vi-VN"));
+    .replace(/\d+\.?\d*/g, (token) => {
+      if (token.endsWith(".")) {
+        const intPart = token.slice(0, -1);
+        return (intPart ? Number(intPart).toLocaleString("vi-VN") : "0") + ",";
+      }
+      const [intPart, decPart] = token.split(".");
+      const intFormatted = intPart ? Number(intPart).toLocaleString("vi-VN") : "0";
+      return decPart !== undefined ? `${intFormatted},${decPart}` : intFormatted;
+    });
 }
 
 function CalcKeypad({ onKey, onClear, onBackspace, onEqual, onDone }) {
@@ -307,17 +315,15 @@ function CalcKeypad({ onKey, onClear, onBackspace, onEqual, onDone }) {
               padding: "16px 0",
             }}
           >
-            {k}
+            {k === "." ? "," : k}
           </button>
         ))}
       </div>
-      <div className="grid grid-cols-2 gap-2 mt-2">
-        <button type="button" onClick={onClear} className="mono rounded-lg" style={{ background: COLORS.surface, color: COLORS.expense, border: "1px solid " + COLORS.border, fontSize: 16, padding: "14px 0" }}>C</button>
-        <button type="button" onClick={onBackspace} className="mono rounded-lg" style={{ background: COLORS.surface, color: COLORS.textPrimary, border: "1px solid " + COLORS.border, fontSize: 20, padding: "14px 0" }}>⌫</button>
-      </div>
       <div className="flex gap-2 mt-2">
-        <button type="button" onClick={onEqual} className="mono rounded-lg flex-1" style={{ background: COLORS.accent, color: COLORS.bg, fontWeight: 700, fontSize: 18, padding: "14px 0" }}>=</button>
-        <button type="button" onClick={onDone} className="sans rounded-lg flex-1" style={{ border: "1px solid " + COLORS.cream, color: COLORS.cream, fontSize: 15, padding: "14px 0" }}>Xong</button>
+        <button type="button" onClick={onClear} className="mono rounded-lg" style={{ background: COLORS.surface, color: COLORS.expense, border: "1px solid " + COLORS.border, fontSize: 20, padding: "14px 0", flex: 1 }}>C</button>
+        <button type="button" onClick={onBackspace} className="mono rounded-lg" style={{ background: COLORS.surface, color: COLORS.textPrimary, border: "1px solid " + COLORS.border, fontSize: 20, padding: "14px 0", flex: 1 }}>⌫</button>
+        <button type="button" onClick={onEqual} className="mono rounded-lg" style={{ background: COLORS.accent, color: COLORS.bg, fontWeight: 700, fontSize: 18, padding: "14px 0", flex: 1 }}>=</button>
+        <button type="button" onClick={onDone} className="sans rounded-lg" style={{ border: "1px solid " + COLORS.cream, color: COLORS.cream, fontSize: 15, padding: "14px 0", flex: 1 }}>Xong</button>
       </div>
     </div>
   );
@@ -326,6 +332,7 @@ function CalcKeypad({ onKey, onClear, onBackspace, onEqual, onDone }) {
 function AmountInput({ value, onChange, placeholder = "0", align = "left" }) {
   const [open, setOpen] = useState(false);
   const [expr, setExpr] = useState("");
+  const [justEvaluated, setJustEvaluated] = useState(false);
   const wrapRef = useRef(null);
 
   function commitAndClose() {
@@ -333,6 +340,7 @@ function AmountInput({ value, onChange, placeholder = "0", align = "left" }) {
     if (result !== null) onChange(String(Math.round(result * 100) / 100));
     setOpen(false);
     setExpr("");
+    setJustEvaluated(false);
   }
 
   useEffect(() => {
@@ -351,6 +359,24 @@ function AmountInput({ value, onChange, placeholder = "0", align = "left" }) {
 
   const display = open ? formatExprDisplay(expr) : (value ? Number(value).toLocaleString("vi-VN") : "");
 
+  function handleKey(k) {
+    if (/^\d$/.test(k) && justEvaluated) {
+      // vừa bấm "=" xong, gõ số tiếp theo -> gộp thẳng vào số nguyên, bỏ dấu thập phân
+      const lastSegment = expr.split(/[+\-*/]/).pop();
+      const head = expr.slice(0, expr.length - lastSegment.length);
+      const merged = lastSegment.includes(".") ? lastSegment.replace(".", "") : lastSegment;
+      setExpr(head + merged + k);
+      setJustEvaluated(false);
+      return;
+    }
+    setJustEvaluated(false);
+    if (k === ".") {
+      const lastSegment = expr.split(/[+\-*/]/).pop();
+      if (lastSegment.includes(".")) return; // đã có dấu . rồi, bỏ qua
+    }
+    setExpr(expr + k);
+  }
+
   return (
     <div ref={wrapRef} style={{ position: "relative" }}>
       <input
@@ -360,23 +386,20 @@ function AmountInput({ value, onChange, placeholder = "0", align = "left" }) {
         style={{ textAlign: align }}
         placeholder={placeholder}
         value={display}
-        onFocus={() => { setOpen(true); setExpr(value ? String(value) : ""); }}
+        onFocus={() => { setOpen(true); setExpr(value ? String(value) : ""); setJustEvaluated(false); }}
       />
       {open && (
         <div style={{ marginTop: 6 }}>
           <CalcKeypad
-            onKey={(k) => setExpr((e) => {
-              if (k === ".") {
-                const lastSegment = e.split(/[+\-*/]/).pop();
-                if (lastSegment.includes(".")) return e; // đã có dấu . rồi, bỏ qua
-              }
-              return e + k;
-            })}
-            onClear={() => setExpr("")}
-            onBackspace={() => setExpr((e) => e.slice(0, -1))}
+            onKey={handleKey}
+            onClear={() => { setJustEvaluated(false); setExpr(""); }}
+            onBackspace={() => { setJustEvaluated(false); setExpr((e) => e.slice(0, -1)); }}
             onEqual={() => {
               const result = evalExpr(expr);
-              if (result !== null) setExpr(String(Math.round(result * 100) / 100));
+              if (result !== null) {
+                setExpr(String(Math.round(result * 100) / 100));
+                setJustEvaluated(true);
+              }
             }}
             onDone={commitAndClose}
           />
