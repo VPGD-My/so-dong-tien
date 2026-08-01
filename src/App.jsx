@@ -3,6 +3,7 @@ import {
   Plus, Wallet, CreditCard, Banknote, TrendingDown, TrendingUp, Trash2,
   ArrowRight, ArrowRightLeft, ArrowDownCircle, Landmark, PiggyBank, Repeat,
   Settings, Users, BarChart3, PieChart as PieChartIcon, X,Pencil,Search,
+  Flame, ShieldCheck, Minus, CalendarDays,
 } from "lucide-react";
 import { PieChart, Pie, Cell, Tooltip, Legend, ResponsiveContainer } from "recharts";
 import { supabase } from "./supabaseClient";
@@ -108,6 +109,8 @@ const COLORS = {
   textMuted: "#657059",
   expense: "#C1544A",
   transfer: "#7FA6C9",
+  warn: "#D9A24B",
+  over: "#C97B5C",
 };
 const PIE_COLORS = ["#8BAE66", "#EBD5AB", "#628141", "#C1544A", "#7FA6C9", "#B7C99A", "#9C7A3F", "#4F6A3B"];
 
@@ -176,6 +179,17 @@ function getCashFlowDate(tx, account) {
   return new Date(txDate.getFullYear(), dueMonth, account.dueDay);
 }
 
+function polarPt(cx, cy, r, angleDeg) {
+  const rad = (angleDeg * Math.PI) / 180;
+  return { x: cx + r * Math.cos(rad), y: cy + r * Math.sin(rad) };
+}
+function arcPathStr(cx, cy, r, startAngle, endAngle) {
+  const start = polarPt(cx, cy, r, startAngle);
+  const end = polarPt(cx, cy, r, endAngle);
+  const large = endAngle - startAngle <= 180 ? 0 : 1;
+  return `M ${start.x} ${start.y} A ${r} ${r} 0 ${large} 1 ${end.x} ${end.y}`;
+}
+
 function occurrenceDate(r, account, n) {
   if (account && account.type === "credit" && r.repeatUnit === "month") {
     const start = new Date(r.startDate + "T00:00:00");
@@ -239,12 +253,22 @@ function AccIcon({ type, size = 16, color }) {
   return <Icon size={size} color={color} />;
 }
 
+function applyPercent(expr) {
+  // A+B%, A-B% -> B% tính theo A (vd 800000-80% = 800000 - 800000*80/100)
+  let out = expr.replace(/(-?\d+\.?\d*)([+\-])(\d+\.?\d*)%/g, (_, a, op, b) => `${a}${op}(${a}*${b}/100)`);
+  // A*B%, A/B% -> B% quy về phân số (vd 800000*80% = 800000*0.8)
+  out = out.replace(/(-?\d+\.?\d*)([*/])(\d+\.?\d*)%/g, (_, a, op, b) => `${a}${op}(${b}/100)`);
+  // % còn lại đứng một mình (vd chỉ gõ "80%") -> quy về phân số
+  out = out.replace(/(\d+\.?\d*)%/g, (_, b) => `(${b}/100)`);
+  return out;
+}
+
 function evalExpr(expr) {
   if (!expr) return null;
-  if (!/^[0-9+\-*/().]*$/.test(expr)) return null;
+  if (!/^[0-9+\-*/().%]*$/.test(expr)) return null;
   try {
     // eslint-disable-next-line no-new-func
-    const result = Function('"use strict"; return (' + expr + ')')();
+    const result = Function('"use strict"; return (' + applyPercent(expr) + ')')();
     return typeof result === "number" && isFinite(result) ? result : null;
   } catch {
     return null;
@@ -264,7 +288,7 @@ function CalcKeypad({ onKey, onClear, onBackspace, onEqual, onDone }) {
     ["7", "8", "9", "÷"],
     ["4", "5", "6", "×"],
     ["1", "2", "3", "−"],
-    ["C", "0", "⌫", "+"],
+    ["0", ".", "%", "+"],
   ];
   return (
     <div className="rounded-lg p-3" style={{ background: COLORS.surface2, border: "1px solid " + COLORS.border }}>
@@ -273,23 +297,23 @@ function CalcKeypad({ onKey, onClear, onBackspace, onEqual, onDone }) {
           <button
             key={k}
             type="button"
-            onClick={() => {
-              if (k === "C") onClear();
-              else if (k === "⌫") onBackspace();
-              else onKey(k === "×" ? "*" : k === "÷" ? "/" : k === "−" ? "-" : k);
-            }}
+            onClick={() => onKey(k === "×" ? "*" : k === "÷" ? "/" : k === "−" ? "-" : k)}
             className="mono rounded-lg"
             style={{
-              background: ["÷", "×", "−", "+"].includes(k) ? COLORS.accentDark : COLORS.surface,
-              color: k === "C" ? COLORS.expense : COLORS.textPrimary,
+              background: ["÷", "×", "−", "+", "%"].includes(k) ? COLORS.accentDark : COLORS.surface,
+              color: COLORS.textPrimary,
               border: "1px solid " + COLORS.border,
-              fontSize: k === "⌫" ? 26 : 20,
+              fontSize: 20,
               padding: "16px 0",
             }}
           >
             {k}
           </button>
         ))}
+      </div>
+      <div className="grid grid-cols-2 gap-2 mt-2">
+        <button type="button" onClick={onClear} className="mono rounded-lg" style={{ background: COLORS.surface, color: COLORS.expense, border: "1px solid " + COLORS.border, fontSize: 16, padding: "14px 0" }}>C</button>
+        <button type="button" onClick={onBackspace} className="mono rounded-lg" style={{ background: COLORS.surface, color: COLORS.textPrimary, border: "1px solid " + COLORS.border, fontSize: 20, padding: "14px 0" }}>⌫</button>
       </div>
       <div className="flex gap-2 mt-2">
         <button type="button" onClick={onEqual} className="mono rounded-lg flex-1" style={{ background: COLORS.accent, color: COLORS.bg, fontWeight: 700, fontSize: 18, padding: "14px 0" }}>=</button>
@@ -306,7 +330,7 @@ function AmountInput({ value, onChange, placeholder = "0", align = "left" }) {
 
   function commitAndClose() {
     const result = evalExpr(expr);
-    if (result !== null) onChange(String(Math.round(result)));
+    if (result !== null) onChange(String(Math.round(result * 100) / 100));
     setOpen(false);
     setExpr("");
   }
@@ -341,12 +365,18 @@ function AmountInput({ value, onChange, placeholder = "0", align = "left" }) {
       {open && (
         <div style={{ marginTop: 6 }}>
           <CalcKeypad
-            onKey={(k) => setExpr((e) => e + k)}
+            onKey={(k) => setExpr((e) => {
+              if (k === ".") {
+                const lastSegment = e.split(/[+\-*/]/).pop();
+                if (lastSegment.includes(".")) return e; // đã có dấu . rồi, bỏ qua
+              }
+              return e + k;
+            })}
             onClear={() => setExpr("")}
             onBackspace={() => setExpr((e) => e.slice(0, -1))}
             onEqual={() => {
               const result = evalExpr(expr);
-              if (result !== null) setExpr(String(Math.round(result)));
+              if (result !== null) setExpr(String(Math.round(result * 100) / 100));
             }}
             onDone={commitAndClose}
           />
@@ -594,6 +624,179 @@ function MonthReportCard({ monthKeyStr, data, txList, onEditTx }) {
           {txList.length === 0 && <p className="sans text-xs" style={{ color: COLORS.textMuted }}>Không có giao dịch.</p>}
         </div>
       )}
+    </div>
+  );
+}
+
+function BudgetPaceView({ budgets, currentMonthExpenseByCat, lastMonthExpenseByCat, txs, onEdit, onRemove }) {
+  const [dailyOverride, setDailyOverride] = useState({});
+  const statusColor = (status) => (status === "over" ? COLORS.over : status === "warn" ? COLORS.warn : COLORS.accent);
+  const today = new Date();
+  const dayOfMonth = today.getDate();
+  const daysInMonth = new Date(today.getFullYear(), today.getMonth() + 1, 0).getDate();
+  const daysLeft = Math.max(1, daysInMonth - dayOfMonth);
+  const idealPct = (dayOfMonth / daysInMonth) * 100;
+
+  const paceColor = (mult) => (mult >= 1.3 ? COLORS.expense : mult >= 1.0 ? WARN_COLOR : COLORS.accent);
+  const paceLabel = (mult) =>
+    mult >= 1.3 ? `Nhanh hơn kế hoạch ${mult.toFixed(1)}x`
+    : mult >= 1.05 ? "Nhỉnh hơn kế hoạch"
+    : mult >= 0.85 ? "Đúng nhịp"
+    : "Chậm hơn kế hoạch";
+  const PaceIcon = ({ mult, size = 12 }) =>
+    mult >= 1.05 ? <TrendingUp size={size} /> : mult >= 0.85 ? <Minus size={size} /> : <TrendingDown size={size} />;
+
+  const enriched = useMemo(() => {
+  const cutoff = new Date(today.getFullYear(), today.getMonth(), today.getDate() - 30);
+  return budgets.map((b) => {
+    const spent = currentMonthExpenseByCat[b.category] || 0;
+    const lastMonthSpent = lastMonthExpenseByCat[b.category] || 0;
+    const limit = b.limit || 0;
+    const pct = limit > 0 ? (spent / limit) * 100 : 0;
+    const paceMult = idealPct > 0 ? pct / idealPct : 0;
+    const dailySafe = (limit - spent) / daysLeft;
+    const status = pct >= 100 ? "over" : pct >= 80 ? "warn" : "ok";
+    const daySet = new Set(
+      txs.filter((t) => t.type === "expense" && t.category === b.category && new Date(t.date + "T00:00:00") >= cutoff)
+         .map((t) => t.date)
+    );
+    const freq = daySet.size / 30;
+    const autoIsDaily = freq >= 0.4;
+    const isDaily = dailyOverride[b.category] ?? autoIsDaily;
+    return { ...b, spent, lastMonthSpent, limit, pct, paceMult, dailySafe, status, isDaily };
+  }).sort((a, b2) => b2.paceMult - a.paceMult);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+}, [budgets, currentMonthExpenseByCat, lastMonthExpenseByCat, txs, idealPct, daysLeft, dailyOverride]);
+ 
+  if (budgets.length === 0) {
+    return <p className="sans text-xs" style={{ color: COLORS.textMuted }}>Chưa có ngân sách nào — thêm trong Cài đặt.</p>;
+  }
+
+  const totalLimit = budgets.reduce((s, b) => s + (b.limit || 0), 0);
+  const totalSpent = budgets.reduce((s, b) => s + (currentMonthExpenseByCat[b.category] || 0), 0);
+  const totalPct = totalLimit > 0 ? (totalSpent / totalLimit) * 100 : 0;
+  const totalDailySafe = (totalLimit - totalSpent) / daysLeft;
+
+  const mostUrgent = enriched.find((b) => b.spent > 0) || null;
+  const rest = enriched.filter((b) => b !== mostUrgent);
+
+  const cx = 140, cy = 120, r = 96;
+  const gaugeColor = totalPct >= 100 ? COLORS.over : totalPct >= idealPct ? COLORS.warn : COLORS.accent;
+  const valueAngle = 180 + Math.min(100, totalPct) * 1.8;
+  const idealAngle = 180 + Math.min(100, idealPct) * 1.8;
+  const idealTickOuter = polarPt(cx, cy, r + 12, idealAngle);
+  const idealTickInner = polarPt(cx, cy, r - 6, idealAngle);
+
+  return (
+    <div>
+      <div className="rounded-lg" style={{ background: COLORS.surface, border: "1px solid " + COLORS.border, borderRadius: 14, padding: "18px 16px 8px", marginBottom: 16 }}>
+        <svg viewBox="0 0 280 145" width="100%" height="150">
+          <path d={arcPathStr(cx, cy, r, 180, 360)} fill="none" stroke={COLORS.surface2} strokeWidth={16} strokeLinecap="round" />
+          <path d={arcPathStr(cx, cy, r, 180, valueAngle)} fill="none" stroke={gaugeColor} strokeWidth={16} strokeLinecap="round" />
+          <text x={cx} y={cy - 20} textAnchor="middle" fontSize="26" fontWeight="700" fill={gaugeColor} fontFamily="'JetBrains Mono', monospace">{Math.round(totalPct)}%</text>
+          <text x={cx} y={cy - 2} textAnchor="middle" fontSize="10.5" fill={COLORS.textMuted} fontFamily="system-ui">đã dùng · mốc lý tưởng hôm nay {Math.round(idealPct)}%</text>
+        </svg>
+        <div className="sans" style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: COLORS.textMuted, padding: "0 6px 10px" }}>
+          <span>{fmtVND(totalSpent)} / {fmtVND(totalLimit)}</span>
+          <span className="mono" style={{ color: totalDailySafe >= 0 ? COLORS.accent : COLORS.expense, fontWeight: 700 }}>
+            {totalDailySafe >= 0 ? `An toàn ~${fmtVND(totalDailySafe)}/ngày` : `Vượt ${fmtVND(-totalDailySafe)}/ngày`}
+          </span>
+        </div>
+      </div>
+
+      {!mostUrgent && (
+        <div className="rounded-lg" style={{ background: COLORS.surface, border: "1px solid " + COLORS.border, borderRadius: 14, padding: 16, marginBottom: 16, textAlign: "center" }}>
+          <p className="sans text-xs" style={{ color: COLORS.textMuted }}>Chưa có chi tiêu nào được ghi nhận trong tháng này.</p>
+        </div>
+      )}
+
+      {mostUrgent && (
+        <div className="rounded-lg" style={{
+          background: "linear-gradient(135deg, #332A1F 0%, " + COLORS.surface + " 70%)",
+          border: "1.5px solid " + paceColor(mostUrgent.paceMult), borderRadius: 14, padding: 16, marginBottom: 16,
+        }}>
+          <div className="sans" style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11, color: paceColor(mostUrgent.paceMult), marginBottom: 8, fontWeight: 700, letterSpacing: 0.3, textTransform: "uppercase" }}>
+            <Flame size={13} /> Cần chú ý nhất
+          </div>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 6 }}>
+            <span style={{ fontSize: 17, fontWeight: 600 }}>{mostUrgent.category}</span>
+            <div className="flex items-center gap-2">
+              <span className="mono" style={{ fontSize: 13, color: paceColor(mostUrgent.paceMult), fontWeight: 700 }}>{Math.round(mostUrgent.pct)}%</span>
+              <button onClick={() => onEdit(mostUrgent)} style={{ color: COLORS.textMuted }}><Pencil size={13} /></button>
+              <button onClick={() => onRemove(mostUrgent.category)} style={{ color: COLORS.textMuted }}><Trash2 size={13} /></button>
+            </div>
+          </div>
+          <button
+            onClick={() => setDailyOverride((p) => ({ ...p, [mostUrgent.category]: !mostUrgent.isDaily }))}
+            className="sans"
+            style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 10, color: COLORS.textMuted, border: "1px solid " + COLORS.border, borderRadius: 999, padding: "2px 8px", marginBottom: 8, background: "transparent" }}
+          >
+            {mostUrgent.isDaily ? <Repeat size={10} /> : <CalendarDays size={10} />}
+            {mostUrgent.isDaily ? "Chi tiêu hằng ngày" : "Không thường xuyên"}
+          </button>
+            <div style={{ height: 8, borderRadius: 999, background: COLORS.surface2, overflow: "hidden", marginBottom: 6 }}>
+              <div style={{ height: "100%", width: `${Math.min(100, mostUrgent.pct)}%`, background: paceColor(mostUrgent.paceMult) }} />
+            </div>
+            <div className="mono" style={{ display: "flex", justifyContent: "space-between", fontSize: 11.5, color: COLORS.textSecondary, marginBottom: 8 }}>
+              <span>{fmtVND(mostUrgent.spent)} / {fmtVND(mostUrgent.limit)}</span>
+              <span style={{ color: COLORS.textMuted }}>T.trước: {fmtVND(mostUrgent.lastMonthSpent)}</span>
+            </div>
+            <p className="sans" style={{ fontSize: 12.5, color: COLORS.textSecondary, marginBottom: 4, display: "flex", alignItems: "center", gap: 5 }}>
+              <PaceIcon mult={mostUrgent.paceMult} /> {paceLabel(mostUrgent.paceMult)}
+            </p>
+          <p className="sans" style={{ fontSize: 12.5, color: COLORS.textPrimary }}>
+            {mostUrgent.dailySafe >= 0
+              ? (mostUrgent.isDaily
+                  ? <>Còn được chi <span className="mono" style={{ color: COLORS.accent, fontWeight: 700 }}>{fmtVND(mostUrgent.dailySafe)}</span>/ngày trong {daysLeft} ngày còn lại</>
+                  : <>Còn <span className="mono" style={{ color: COLORS.accent, fontWeight: 700 }}>{fmtVND(mostUrgent.limit - mostUrgent.spent)}</span> cho {daysLeft} ngày còn lại của tháng</>)
+              : <>Đã vượt <span className="mono" style={{ color: COLORS.expense, fontWeight: 700 }}>{fmtVND(mostUrgent.spent - mostUrgent.limit)}</span> — nên dừng chi cho mục này</>}
+          </p>
+        </div>
+      )}
+
+      {rest.length > 0 && <p className="sans text-xs" style={{ color: COLORS.textSecondary, marginBottom: 8 }}>Xếp hạng theo tốc độ chi (nhanh nhất trước)</p>}
+      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+        {rest.map((b) => (
+          <div key={b.category} className="rounded-lg" style={{ background: COLORS.surface, border: "1px solid " + COLORS.border, borderRadius: 10, padding: "10px 12px" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
+              <span className="sans" style={{ fontSize: 13, display: "flex", alignItems: "center", gap: 6 }}>
+                {b.category}
+                <button
+                  onClick={() => setDailyOverride((p) => ({ ...p, [b.category]: !b.isDaily }))}
+                  className="sans"
+                  style={{ display: "inline-flex", alignItems: "center", gap: 3, fontSize: 9.5, color: COLORS.textMuted, border: "1px solid " + COLORS.border, borderRadius: 999, padding: "1px 6px", background: "transparent" }}
+                >
+                  {b.isDaily ? <Repeat size={9} /> : <CalendarDays size={9} />}
+                  {b.isDaily ? "Hằng ngày" : "Không thường xuyên"}
+                </button>
+              </span>
+              <div className="flex items-center gap-2" style={{ flexShrink: 0 }}>
+                <span className="sans" style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 10.5, color: paceColor(b.paceMult) }}>
+                  <PaceIcon mult={b.paceMult} size={11} /> {paceLabel(b.paceMult)}
+                </span>
+                <button onClick={() => onEdit(b)} style={{ color: COLORS.textMuted }}><Pencil size={12} /></button>
+                <button onClick={() => onRemove(b.category)} style={{ color: COLORS.textMuted }}><Trash2 size={12} /></button>
+              </div>
+            </div>
+            <div style={{ height: 6, borderRadius: 999, background: COLORS.surface2, overflow: "hidden", marginTop: 6, marginBottom: 6 }}>
+              <div style={{ height: "100%", width: `${Math.min(100, b.pct)}%`, background: paceColor(b.paceMult) }} />
+            </div>
+            <div style={{ display: "flex", justifyContent: "space-between" }}>
+              <span className="mono" style={{ fontSize: 11, color: COLORS.textMuted }}>{fmtVND(b.spent)} / {fmtVND(b.limit)}</span>
+              <span className="mono" style={{ fontSize: 11, color: b.dailySafe >= 0 ? COLORS.textSecondary : COLORS.expense }}>
+                {b.dailySafe >= 0
+                  ? (b.isDaily ? `${fmtVND(b.dailySafe)}/ngày còn lại` : `còn ${fmtVND(b.limit - b.spent)}/${daysLeft} ngày còn lại`)
+                  : (b.isDaily ? `vượt ${fmtVND(-b.dailySafe)}/ngày` : `vượt ${fmtVND(b.spent - b.limit)}`)}
+              </span>
+            </div>
+            <p className="mono" style={{ fontSize: 10, color: COLORS.textMuted, marginTop: 2 }}>Tháng trước: {fmtVND(b.lastMonthSpent)}</p>
+          </div>
+        ))}
+      </div>
+
+      <div className="sans" style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 10.5, color: COLORS.textMuted, marginTop: 14, justifyContent: "center", textAlign: "center" }}>
+        <ShieldCheck size={12} style={{ flexShrink: 0 }} /> Nhãn "Hằng ngày" tự nhận diện theo tần suất giao dịch, bấm vào để đổi tay
+      </div>
     </div>
   );
 }
@@ -1048,6 +1251,65 @@ async function toggleRecurringActive(r) {
     setTimeout(() => document.getElementById("add-budget-section")?.scrollIntoView({ behavior: "smooth" }), 100);
   }
 
+  async function applyParetoBudgets() {
+  const now = new Date();
+  const lastMonthKey = monthKey(new Date(now.getFullYear(), now.getMonth() - 1, 1));
+  const recurringCats = new Set(recurring.map((r) => r.category)); // danh mục đang là chi phí cố định/định kỳ/trả góp
+
+  const lastMonthByCat = {};
+  txs.forEach((t) => {
+    if (t.type !== "expense") return;
+    if (t.recurringId) return;
+    if (recurringCats.has(t.category)) return;
+    if (monthKey(new Date(t.date + "T00:00:00")) !== lastMonthKey) return;
+    lastMonthByCat[t.category] = (lastMonthByCat[t.category] || 0) + t.amount;
+  });
+
+  const entries = Object.entries(lastMonthByCat).sort((a, b) => b[1] - a[1]);
+  const total = entries.reduce((s, [, v]) => s + v, 0);
+
+  let cum = 0;
+  const paretoCats = [];
+  for (const [cat, amt] of entries) {
+    cum += amt;
+    paretoCats.push({ cat, amt });
+    if (total > 0 && cum / total >= 0.8) break;
+  }
+
+  const staleBudgets = budgets.filter((b) => recurringCats.has(b.category));
+
+  if (paretoCats.length === 0 && staleBudgets.length === 0) {
+    showToast("Chưa có dữ liệu chi tiêu tháng trước để tính");
+    return;
+  }
+
+  const confirmMsg = staleBudgets.length > 0
+    ? `Áp dụng hạn mức = 80% chi tiêu tháng trước cho ${paretoCats.length} danh mục chiếm ~80% tổng chi (Pareto), đồng thời xoá ${staleBudgets.length} ngân sách đang gán nhầm cho khoản chi phí cố định/định kỳ (${staleBudgets.map(b => b.category).join(", ")})? Hạn mức hiện có của các danh mục Pareto sẽ bị ghi đè.`
+    : `Áp dụng hạn mức = 80% chi tiêu tháng trước cho ${paretoCats.length} danh mục chiếm ~80% tổng chi (Pareto)? Hạn mức hiện có của các danh mục này sẽ bị ghi đè.`;
+  if (!window.confirm(confirmMsg)) return;
+
+  for (const b of staleBudgets) {
+    const { error } = await supabase.from("budgets").delete().eq("id", b.id);
+    if (error) { console.error(error); continue; }
+    setBudgets((prev) => prev.filter((x) => x.id !== b.id));
+  }
+
+  for (const { cat, amt } of paretoCats) {
+    const newLimit = Math.floor((amt * 0.8) / 100000) * 100000;
+    const existing = budgets.find((b) => b.category === cat);
+    if (existing) {
+      const { error } = await supabase.from("budgets").update({ monthly_limit: newLimit }).eq("id", existing.id);
+      if (error) { console.error(error); continue; }
+      setBudgets((prev) => prev.map((b) => b.category === cat ? { ...b, limit: newLimit } : b));
+    } else {
+      const { data, error } = await supabase.from("budgets").insert({ category: cat, monthly_limit: newLimit }).select().single();
+      if (error) { console.error(error); continue; }
+      setBudgets((prev) => [...prev, { id: data.id, category: data.category, limit: data.monthly_limit }]);
+    }
+  }
+  showToast("Đã áp dụng hạn mức tự động theo Pareto 80/20");
+}
+
   async function removeBudget(cat) {
   if (!window.confirm('Xóa ngân sách "' + cat + '"?')) return;
   const b = budgets.find((x) => x.category === cat);
@@ -1251,7 +1513,17 @@ const reconcile = useMemo(() => {
   const pieIncome = useMemo(() => Object.entries(byCategory.inc).map(([name, value]) => ({ name, value })), [byCategory]);
 
   const currentMonthExpenseByCat = useMemo(() => {
-    const key = monthKey(new Date(todayISO() + "T00:00:00"));
+  const key = monthKey(new Date(todayISO() + "T00:00:00"));
+  const g = {};
+    txs.filter((t) => t.type === "expense" && monthKey(new Date(t.date + "T00:00:00")) === key).forEach((t) => {
+      g[t.category] = (g[t.category] || 0) + t.amount;
+    });
+    return g;
+  }, [txs]);
+
+  const lastMonthExpenseByCat = useMemo(() => {
+    const now = new Date(todayISO() + "T00:00:00");
+    const key = monthKey(new Date(now.getFullYear(), now.getMonth() - 1, 1));
     const g = {};
     txs.filter((t) => t.type === "expense" && monthKey(new Date(t.date + "T00:00:00")) === key).forEach((t) => {
       g[t.category] = (g[t.category] || 0) + t.amount;
@@ -1741,33 +2013,40 @@ const reconcile = useMemo(() => {
       {/* NGAN SACH */}
       {tab === "ngansach" && (
         <div className="px-5 pt-5 space-y-7">
-          <Section title="Ngân sách theo danh mục (tháng hiện tại)">
-            <div className="space-y-3">
-              {budgets.map((b) => {
-                const spent = currentMonthExpenseByCat[b.category] || 0;
-                const pct = Math.min(100, (spent / b.limit) * 100);
-                const over = spent > b.limit;
-               return (
-                  <div key={b.category} className="rounded-lg p-3" style={{ background: COLORS.surface, border: "1px solid " + COLORS.border }}>
-                    <div className="flex items-center justify-between mb-1.5">
-                      <span className="sans text-sm">{b.category}</span>
-                      <div className="flex items-center gap-2">
-                        <button onClick={() => startEditBudget(b)} style={{ color: COLORS.textMuted }}><Pencil size={13} /></button>
-                        <button onClick={() => removeBudget(b.category)} style={{ color: COLORS.textMuted }}><Trash2 size={13} /></button>
-                      </div>
-                    </div>
-                    <div className="h-2 rounded-full mb-1.5" style={{ background: COLORS.surface2 }}>
-                      <div className="h-2 rounded-full" style={{ width: `${pct}%`, background: over ? COLORS.expense : COLORS.accent }} />
-                    </div>
-                    <p className="mono text-xs" style={{ color: over ? COLORS.expense : COLORS.textSecondary }}>{fmtVND(spent)} / {fmtVND(b.limit)}</p>
-                  </div>
-                );
-              })}
-              {budgets.length === 0 && <p className="sans text-xs" style={{ color: COLORS.textMuted }}>Chưa có ngân sách nào — thêm trong Cài đặt.</p>}
-            </div>
+          <Section
+            title="Ngân sách theo danh mục (tháng hiện tại)"
+            right={
+              <button
+                onClick={applyParetoBudgets}
+                className="sans text-xs px-2 py-1 rounded"
+                style={{ border: "1px solid " + COLORS.border, color: COLORS.textSecondary }}
+              >
+                Tự động theo tháng trước (80/20)
+              </button>
+            }
+          >
+            <BudgetPaceView
+              budgets={budgets}
+              currentMonthExpenseByCat={currentMonthExpenseByCat}
+              lastMonthExpenseByCat={lastMonthExpenseByCat}
+              txs={txs}
+              onEdit={startEditBudget}
+              onRemove={removeBudget}
+            />
           </Section>
+           </div>
+      )}
 
-          <Section title="Chi phí định kỳ (trả góp, chi phí cố định)">
+      {tab === "dinhky" && (
+        <div className="px-5 pt-5 space-y-7">
+          <Section
+            title="Chi phí định kỳ (trả góp, chi phí cố định)"
+            right={upcomingByUnit.month > 0 && (
+              <span className="sans" style={{ fontSize: 14, color: COLORS.textSecondary }}>
+                Tháng tới: <span className="mono" style={{ color: COLORS.accent, fontSize: 16, fontWeight: 700 }}>{fmtVND(upcomingByUnit.month)}</span>
+              </span>
+            )}
+          >
             {pendingRecurring.length > 0 && (
               <div className="rounded-lg p-3 mb-3" style={{ background: "#332A1C", border: "1px solid " + COLORS.expense }}>
                 <p className="sans text-xs" style={{ color: COLORS.expense, fontWeight: 600 }}>
@@ -1777,7 +2056,6 @@ const reconcile = useMemo(() => {
             )}
             <div className="sans text-xs mb-3 space-y-1" style={{ color: COLORS.textSecondary }}>
               {upcomingByUnit.week > 0 && <p>Tuần tiếp theo: <span className="mono" style={{ color: COLORS.cream }}>{fmtVND(upcomingByUnit.week)}</span></p>}
-              {upcomingByUnit.month > 0 && <p>Tháng tiếp theo: <span className="mono" style={{ color: COLORS.cream }}>{fmtVND(upcomingByUnit.month)}</span></p>}
               {upcomingByUnit.year > 0 && <p>Năm tiếp theo: <span className="mono" style={{ color: COLORS.cream }}>{fmtVND(upcomingByUnit.year)}</span></p>}
             </div>
             <div className="space-y-4">
@@ -2225,6 +2503,7 @@ const reconcile = useMemo(() => {
           { id: "nhap", label: "Nhập", icon: Plus },
           { id: "baocao", label: "Báo cáo", icon: BarChart3 },
           { id: "ngansach", label: "Ngân sách", icon: PiggyBank },
+          { id: "dinhky", label: "Định kỳ", icon: Repeat },
           { id: "taikhoan", label: "Tài khoản", icon: Wallet },
           { id: "caidat", label: "Cài đặt", icon: Settings },
         ].map((t) => (
