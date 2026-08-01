@@ -296,7 +296,6 @@ function CalcKeypad({ onKey, onClear, onBackspace, onEqual, onDone }) {
     ["7", "8", "9", "÷"],
     ["4", "5", "6", "×"],
     ["1", "2", "3", "−"],
-    ["0", ".", "%", "+"],
   ];
   return (
     <div className="rounded-lg p-3" style={{ background: COLORS.surface2, border: "1px solid " + COLORS.border }}>
@@ -308,20 +307,28 @@ function CalcKeypad({ onKey, onClear, onBackspace, onEqual, onDone }) {
             onClick={() => onKey(k === "×" ? "*" : k === "÷" ? "/" : k === "−" ? "-" : k)}
             className="mono rounded-lg"
             style={{
-              background: ["÷", "×", "−", "+", "%"].includes(k) ? COLORS.accentDark : COLORS.surface,
+              background: ["÷", "×", "−"].includes(k) ? COLORS.accentDark : COLORS.surface,
               color: COLORS.textPrimary,
               border: "1px solid " + COLORS.border,
               fontSize: 20,
               padding: "16px 0",
             }}
           >
-            {k === "." ? "," : k}
+            {k}
           </button>
         ))}
       </div>
+
+      <div className="grid grid-cols-4 gap-2 mt-2">
+        <button type="button" onClick={() => onKey(".")} className="mono rounded-lg" style={{ background: COLORS.surface, color: COLORS.textPrimary, border: "1px solid " + COLORS.border, fontSize: 20, padding: "16px 0" }}>,</button>
+        <button type="button" onClick={() => onKey("0")} className="mono rounded-lg" style={{ background: COLORS.surface, color: COLORS.textPrimary, border: "1px solid " + COLORS.border, fontSize: 20, padding: "16px 0" }}>0</button>
+        <button type="button" onClick={onBackspace} className="mono rounded-lg" style={{ background: COLORS.surface, color: COLORS.textPrimary, border: "1px solid " + COLORS.border, fontSize: 26, padding: "10px 0" }}>⌫</button>
+        <button type="button" onClick={() => onKey("+")} className="mono rounded-lg" style={{ background: COLORS.accentDark, color: COLORS.textPrimary, border: "1px solid " + COLORS.border, fontSize: 20, padding: "16px 0" }}>+</button>
+      </div>
+
       <div className="flex gap-2 mt-2">
         <button type="button" onClick={onClear} className="mono rounded-lg" style={{ background: COLORS.surface, color: COLORS.expense, border: "1px solid " + COLORS.border, fontSize: 20, padding: "14px 0", flex: 1 }}>C</button>
-        <button type="button" onClick={onBackspace} className="mono rounded-lg" style={{ background: COLORS.surface, color: COLORS.textPrimary, border: "1px solid " + COLORS.border, fontSize: 20, padding: "14px 0", flex: 1 }}>⌫</button>
+        <button type="button" onClick={() => onKey("%")} className="mono rounded-lg" style={{ background: COLORS.accentDark, color: COLORS.textPrimary, border: "1px solid " + COLORS.border, fontSize: 20, padding: "14px 0", flex: 1 }}>%</button>
         <button type="button" onClick={onEqual} className="mono rounded-lg" style={{ background: COLORS.accent, color: COLORS.bg, fontWeight: 700, fontSize: 18, padding: "14px 0", flex: 1 }}>=</button>
         <button type="button" onClick={onDone} className="sans rounded-lg" style={{ border: "1px solid " + COLORS.cream, color: COLORS.cream, fontSize: 15, padding: "14px 0", flex: 1 }}>Xong</button>
       </div>
