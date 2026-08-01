@@ -1806,13 +1806,6 @@ const reconcile = useMemo(() => {
                             />
                           ))}
                         </Pie>
-                        <Tooltip
-                          formatter={(v, n) => {
-                            const total = pieExpense.reduce((s, d) => s + d.value, 0);
-                            return [`${fmtVND(v)} (${((v / total) * 100).toFixed(1)}%)`, n];
-                          }}
-                          contentStyle={{ background: COLORS.surface, border: "1px solid " + COLORS.border, fontSize: 12 }}
-                        />
                         <Legend
                           onClick={(e) => setSelectedExpenseCat((prev) => (prev === e.value ? null : e.value))}
                           payload={pieExpense.map((d, i) => ({
@@ -1835,10 +1828,14 @@ const reconcile = useMemo(() => {
                       const total = pieExpense.reduce((s, x) => s + x.value, 0);
                       if (!d) return null;
                       return (
-                        <div style={{ position: "absolute", top: "38%", left: "50%", transform: "translate(-50%, -50%)", textAlign: "center", pointerEvents: "none" }}>
-                          <p className="sans text-xs" style={{ color: COLORS.textSecondary, maxWidth: 110, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{d.name}</p>
-                          <p className="mono text-sm" style={{ color: COLORS.cream, fontWeight: 700 }}>{fmtVND(d.value)}</p>
-                          <p className="sans text-xs" style={{ color: COLORS.textMuted }}>{((d.value / total) * 100).toFixed(1)}%</p>
+                        <div style={{
+                          position: "absolute", top: 8, right: 4, width: 150,
+                          background: COLORS.surface, border: "1px solid " + COLORS.border, borderRadius: 10,
+                          padding: "8px 10px", boxShadow: "0 4px 14px rgba(0,0,0,0.4)", textAlign: "right", zIndex: 5,
+                        }}>
+                          <p className="sans text-xs" style={{ color: COLORS.textSecondary, wordBreak: "break-word", lineHeight: 1.3 }}>{d.name}</p>
+                          <p className="mono text-sm" style={{ color: COLORS.cream, fontWeight: 700, whiteSpace: "nowrap" }}>{fmtVND(d.value)}</p>
+                          <p className="sans text-xs" style={{ color: COLORS.textMuted, whiteSpace: "nowrap" }}>{((d.value / total) * 100).toFixed(1)}%</p>
                         </div>
                       );
                     })()}
@@ -1883,14 +1880,7 @@ const reconcile = useMemo(() => {
                             />
                           ))}
                         </Pie>
-                        <Tooltip
-                          formatter={(v, n) => {
-                            const total = pieIncome.reduce((s, d) => s + d.value, 0);
-                            return [`${fmtVND(v)} (${((v / total) * 100).toFixed(1)}%)`, n];
-                          }}
-                          contentStyle={{ background: COLORS.surface, border: "1px solid " + COLORS.border, fontSize: 12 }}
-                        />
-                        <Legend
+                       <Legend
                           onClick={(e) => setSelectedIncomeCat((prev) => (prev === e.value ? null : e.value))}
                           payload={pieIncome.map((d, i) => ({
                             value: d.name,
@@ -1912,10 +1902,14 @@ const reconcile = useMemo(() => {
                       const total = pieIncome.reduce((s, x) => s + x.value, 0);
                       if (!d) return null;
                       return (
-                        <div style={{ position: "absolute", top: "38%", left: "50%", transform: "translate(-50%, -50%)", textAlign: "center", pointerEvents: "none" }}>
-                          <p className="sans text-xs" style={{ color: COLORS.textSecondary, maxWidth: 110, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{d.name}</p>
-                          <p className="mono text-sm" style={{ color: COLORS.cream, fontWeight: 700 }}>{fmtVND(d.value)}</p>
-                          <p className="sans text-xs" style={{ color: COLORS.textMuted }}>{((d.value / total) * 100).toFixed(1)}%</p>
+                        <div style={{
+                          position: "absolute", top: 8, right: 4, width: 150,
+                          background: COLORS.surface, border: "1px solid " + COLORS.border, borderRadius: 10,
+                          padding: "8px 10px", boxShadow: "0 4px 14px rgba(0,0,0,0.4)", textAlign: "right", zIndex: 5,
+                        }}>
+                          <p className="sans text-xs" style={{ color: COLORS.textSecondary, wordBreak: "break-word", lineHeight: 1.3 }}>{d.name}</p>
+                          <p className="mono text-sm" style={{ color: COLORS.cream, fontWeight: 700, whiteSpace: "nowrap" }}>{fmtVND(d.value)}</p>
+                          <p className="sans text-xs" style={{ color: COLORS.textMuted, whiteSpace: "nowrap" }}>{((d.value / total) * 100).toFixed(1)}%</p>
                         </div>
                       );
                     })()}
@@ -2014,7 +2008,7 @@ const reconcile = useMemo(() => {
       {tab === "ngansach" && (
         <div className="px-5 pt-5 space-y-7">
           <Section
-            title="Ngân sách theo danh mục (tháng hiện tại)"
+            title={`Ngân sách theo danh mục (Tháng ${pad(new Date().getMonth() + 1)}/${new Date().getFullYear()})`}
             right={
               <button
                 onClick={applyParetoBudgets}
@@ -2040,7 +2034,7 @@ const reconcile = useMemo(() => {
       {tab === "dinhky" && (
         <div className="px-5 pt-5 space-y-7">
           <Section
-            title="Chi phí định kỳ (trả góp, chi phí cố định)"
+            title="Chi phí định kỳ"
             right={upcomingByUnit.month > 0 && (
               <span className="sans" style={{ fontSize: 14, color: COLORS.textSecondary }}>
                 Tháng tới: <span className="mono" style={{ color: COLORS.accent, fontSize: 16, fontWeight: 700 }}>{fmtVND(upcomingByUnit.month)}</span>
