@@ -667,7 +667,7 @@ function BudgetPaceView({ budgets, currentMonthExpenseByCat, lastMonthExpenseByC
   const daysLeft = Math.max(1, daysInMonth - dayOfMonth);
   const idealPct = (dayOfMonth / daysInMonth) * 100;
 
-  const paceColor = (mult) => (mult >= 1.3 ? COLORS.expense : mult >= 1.0 ? WARN_COLOR : COLORS.accent);
+  const paceColor = (mult) => (mult >= 1.3 ? COLORS.expense : mult >= 1.0 ? COLORS.warn : COLORS.accent);
   const paceLabel = (mult) =>
     mult >= 1.3 ? `Nhanh hơn kế hoạch ${mult.toFixed(1)}x`
     : mult >= 1.05 ? "Nhỉnh hơn kế hoạch"
