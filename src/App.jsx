@@ -89,7 +89,7 @@ function recToDb(r) {
     start_date: r.startDate,
     interval_value: r.repeatValue,
     interval_unit: UNIT_DB_MAP[r.repeatUnit] || "thang",
-    cycle_count: r.cycleCount ? Number(r.cycleCount) : null,
+    cycle_count: r.cycleCount ? Number(r.cycleCount) : 0,
     principal: r.principal ? Number(r.principal) : null,
     is_installment: r.isInstallment || false,
     is_active: r.isActive ?? true,           // ← thêm dòng này
