@@ -43,6 +43,7 @@ function txFromDb(row) {
     vendor: row.vendor,
     note: row.note,
     recurringId: row.recurring_id,       // ← thêm dòng này
+    splitGroupId: row.split_group_id,    // ← thêm dòng này
   };
 }
 
@@ -58,6 +59,7 @@ function txToDb(t) {
     vendor: t.vendor || null,
     note: t.note || null,
     recurring_id: t.recurringId || null,  // ← thêm dòng này
+    split_group_id: t.splitGroupId || null, // ← thêm dòng này
   };
 }
 
@@ -486,6 +488,45 @@ function MetricCard({ label, value, color }) {
     );
   }
 
+function ReconcileItemRow({ it, onSelectTx }) {
+  const [open, setOpen] = useState(false);
+  if (!it.isGroup) {
+    return (
+      <div
+        className="flex justify-between sans text-xs"
+        style={{ color: COLORS.textMuted, cursor: it.tx ? "pointer" : "default" }}
+        onClick={(e) => { e.stopPropagation(); it.tx && onSelectTx && onSelectTx(it.tx); }}
+      >
+        <span>{it.label}</span>
+        <span className="mono" style={{ color: it.sign === "-" ? COLORS.accent : COLORS.textMuted }}>{it.sign === "-" ? "− " : "+ "}{fmtVND(it.amount)}</span>
+      </div>
+    );
+  }
+  return (
+    <div>
+      <div className="flex justify-between sans text-xs" style={{ color: COLORS.textMuted, cursor: "pointer" }} onClick={(e) => { e.stopPropagation(); setOpen(!open); }}>
+        <span>{it.label} <span style={{ fontSize: 10 }}>· {it.children.length} khoản</span></span>
+        <span className="mono" style={{ color: it.sign === "-" ? COLORS.accent : COLORS.textMuted }}>{it.sign === "-" ? "− " : "+ "}{fmtVND(it.amount)}</span>
+      </div>
+            {open && (
+        <div className="mt-1 space-y-1" style={{ paddingLeft: 10, borderLeft: "2px solid " + COLORS.border }}>
+          {it.children.map((c, i) => (
+            <div
+              key={i}
+              className="flex justify-between sans text-xs"
+              style={{ color: COLORS.textSecondary, cursor: c.tx ? "pointer" : "default" }}
+              onClick={(e) => { e.stopPropagation(); c.tx && onSelectTx && onSelectTx(c.tx); }}
+            >
+              <span>{c.label}</span>
+              <span className="mono" style={{ color: COLORS.cream }}>{fmtVND(c.amount)}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function ReconcileRow({ label, value, items, onSelectTx }) {
   const [open, setOpen] = useState(false);
   return (
@@ -497,15 +538,7 @@ function ReconcileRow({ label, value, items, onSelectTx }) {
       {open && items && (
         <div className="mt-2 space-y-1" style={{ borderTop: "1px solid " + COLORS.border, paddingTop: 8 }}>
           {items.map((it, i) => (
-            <div
-              key={i}
-              className="flex justify-between sans text-xs"
-              style={{ color: COLORS.textMuted, cursor: it.tx ? "pointer" : "default" }}
-              onClick={(e) => { e.stopPropagation(); it.tx && onSelectTx && onSelectTx(it.tx); }}
-            >
-              <span>{it.label}</span>
-              <span className="mono" style={{ color: it.sign === "-" ? COLORS.accent : COLORS.textMuted }}>{it.sign === "-" ? "− " : "+ "}{fmtVND(it.amount)}</span>
-            </div>
+            <ReconcileItemRow key={i} it={it} onSelectTx={onSelectTx} />
           ))}
           {items.length === 0 && <p className="sans text-xs" style={{ color: COLORS.textMuted }}>Không có giao dịch.</p>}
         </div>
@@ -574,7 +607,30 @@ function RecurringItemCard({ r, acc, done, pending, txList, unitLabel, onEdit, o
   );
 }
 
-function AccountReportCard({ account, data, balance, txList, onEditTx }) {
+function AccountGroupRow({ group, onEditTx, onEditGroup }) {
+  const [open, setOpen] = useState(false);
+  const total = group.items.reduce((s, t) => s + t.amount, 0);
+  return (
+    <div>
+      <div className="flex justify-between sans text-xs" style={{ color: COLORS.textMuted, cursor: "pointer" }} onClick={(e) => { e.stopPropagation(); setOpen(!open); }}>
+        <span>{fmtDate(group.items[0].date)} · {group.vendor || group.note || "Hóa đơn gộp"} <span style={{ fontSize: 10 }}>· {group.items.length} khoản</span></span>
+        <span className="mono" style={{ color: COLORS.expense }}>-{fmtVND(total)}</span>
+      </div>
+      {open && (
+        <div className="mt-1 space-y-1" style={{ paddingLeft: 10, borderLeft: "2px solid " + COLORS.border }}>
+          {group.items.map((t) => (
+            <div key={t.id} className="flex justify-between sans text-xs" style={{ color: COLORS.textSecondary, cursor: "pointer" }} onClick={(e) => { e.stopPropagation(); onEditTx && onEditTx(t); }}>
+              <span>{t.category}{t.note ? ` · ${t.note}` : ""}</span>
+              <span className="mono" style={{ color: COLORS.cream }}>{fmtVND(t.amount)}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function AccountReportCard({ account, data, balance, txList, onEditTx, onEditGroup }) {
   const [open, setOpen] = useState(false);
   return (
     <div className="rounded-lg p-3" style={{ background: COLORS.surface, border: "1px solid " + COLORS.border, cursor: "pointer" }} onClick={() => setOpen(!open)}>
@@ -585,14 +641,18 @@ function AccountReportCard({ account, data, balance, txList, onEditTx }) {
         <span className="mono" style={{ color: COLORS.cream, textAlign: "right" }}>Số dư: {fmtVND(balance)}</span>
       </div>
       {open && (
-        <div className="mt-2 pt-2 space-y-1" style={{ borderTop: "1px dashed " + COLORS.border }}>
+        <div className="mt-2 pt-2 space-y-1" style={{ borderTop: "1px dashed " + COLORS.border }} onClick={(e) => e.stopPropagation()}>
           {txList.map((t) => (
-            <div key={t.id} className="flex justify-between sans text-xs" style={{ color: COLORS.textMuted, cursor: "pointer" }} onClick={(e) => { e.stopPropagation(); onEditTx && onEditTx(t); }}>
-              <span>{fmtDate(t.date)} · {t.category || (t.type === "transfer" ? "Chuyển khoản" : "—")}{t.note ? ` · ${t.note}` : ""}</span>
-              <span className="mono" style={{ color: t.type === "income" ? COLORS.accent : t.type === "transfer" ? COLORS.transfer : COLORS.expense, flexShrink: 0, marginLeft: 8 }}>
-                {t.type === "income" ? "+" : t.type === "transfer" ? "" : "-"}{fmtVND(t.amount)}
-              </span>
-            </div>
+            t.isGroup ? (
+              <AccountGroupRow key={t.id} group={t} onEditTx={onEditTx} onEditGroup={onEditGroup} />
+            ) : (
+              <div key={t.id} className="flex justify-between sans text-xs" style={{ color: COLORS.textMuted, cursor: "pointer" }} onClick={() => onEditTx && onEditTx(t)}>
+                <span>{fmtDate(t.date)} · {t.category || (t.type === "transfer" ? "Chuyển khoản" : "—")}{t.note ? ` · ${t.note}` : ""}</span>
+                <span className="mono" style={{ color: t.type === "income" ? COLORS.accent : t.type === "transfer" ? COLORS.transfer : COLORS.expense, flexShrink: 0, marginLeft: 8 }}>
+                  {t.type === "income" ? "+" : t.type === "transfer" ? "" : "-"}{fmtVND(t.amount)}
+                </span>
+              </div>
+            )
           ))}
           {txList.length === 0 && <p className="sans text-xs" style={{ color: COLORS.textMuted }}>Không có giao dịch.</p>}
         </div>
@@ -831,6 +891,42 @@ function BudgetPaceView({ budgets, currentMonthExpenseByCat, lastMonthExpenseByC
   );
 }
 
+function SplitGroupRow({ group, onEditTx, onEditGroup }) {
+  const [open, setOpen] = useState(false);
+  const total = group.items.reduce((s, t) => s + t.amount, 0);
+  return (
+    <div className="ledger-line" style={{ cursor: "pointer" }}>
+      <div className="py-3 flex items-center justify-between" style={{ gap: 12 }} onClick={() => setOpen(!open)}>
+        <div className="flex items-center gap-3" style={{ minWidth: 0, flex: 1 }}>
+          <div style={{ color: COLORS.textMuted, flexShrink: 0 }}><AccIcon type={group.accType} /></div>
+          <div style={{ minWidth: 0 }}>
+            <p className="sans text-sm" style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+              {group.vendor || group.note || "Hóa đơn gộp"} <span style={{ color: COLORS.textMuted, fontSize: 11 }}>· {group.items.length} khoản</span>
+            </p>
+            <p className="sans text-xs" style={{ color: COLORS.textMuted, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+              {group.items.map((t) => t.category).join(", ")}
+            </p>
+          </div>
+        </div>
+        <div className="flex flex-col items-end gap-1" style={{ flexShrink: 0 }}>
+          <span className="mono text-sm" style={{ color: COLORS.expense }}>-{fmtVND(total)}</span>
+          <span className="sans text-xs" style={{ color: COLORS.textMuted }}>{group.accName}</span>
+        </div>
+      </div>
+      {open && (
+        <div className="space-y-1 pb-2" style={{ paddingLeft: 12 }}>
+          {group.items.map((t) => (
+            <div key={t.id} className="flex justify-between sans text-xs" style={{ color: COLORS.textMuted, cursor: "pointer" }} onClick={(e) => { e.stopPropagation(); onEditTx(t); }}>
+              <span>{t.category}{t.member ? " · " + t.member : ""}{t.note ? " · " + t.note : ""}</span>
+              <span className="mono" style={{ color: COLORS.textSecondary }}>{fmtVND(t.amount)}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function App() {
   const [session, setSession] = useState(null);
   const [checkingAuth, setCheckingAuth] = useState(true);
@@ -845,6 +941,8 @@ export default function App() {
   const [recurring, setRecurring] = useState([]);
   const [budgets, setBudgets] = useState([]);
   const [editingId, setEditingId] = useState(null);
+  const [editingGroupId, setEditingGroupId] = useState(null);
+  const [originalSplitIds, setOriginalSplitIds] = useState([]);
   const [editingAccId, setEditingAccId] = useState(null);
   const [editingBudgetCat, setEditingBudgetCat] = useState(null);
   const [detailTx, setDetailTx] = useState(null);
@@ -864,12 +962,31 @@ export default function App() {
   const [reportFrom, setReportFrom] = useState(firstDayThisMonth());
   const [reportTo, setReportTo] = useState(lastDayNextMonth());
 
-  const accById = (id) => accounts.find((a) => a.id === id);
+    const accById = (id) => accounts.find((a) => a.id === id);
+
+  function groupSplitTxs(list) {
+    const seen = new Map();
+    const merged = [];
+    list.forEach((t) => {
+      if (!t.splitGroupId) { merged.push(t); return; }
+      if (seen.has(t.splitGroupId)) {
+        seen.get(t.splitGroupId).items.push(t);
+      } else {
+        const acc = accById(t.accountId);
+        const g = { isGroup: true, id: t.splitGroupId, accountId: t.accountId, accName: acc?.name, accType: acc?.type, vendor: t.vendor, note: t.note, items: [t] };
+        seen.set(t.splitGroupId, g);
+        merged.push(g);
+      }
+    });
+    return merged;
+  }
 
   const [form, setForm] = useState({
-  date: todayISO(), amount: "", category: "", member: "",
-  accountId: "", vendor: "", note: "", fromAccountId: "", toAccountId: "",
-  });
+    date: todayISO(), amount: "", category: "", member: "",
+    accountId: "", vendor: "", note: "", fromAccountId: "", toAccountId: "",
+    });
+  const [isSplitEntry, setIsSplitEntry] = useState(false);
+  const [splitLines, setSplitLines] = useState([{ id: "l0", category: "", member: "", amount: "", note: "" }]);
 
   const [newCatType, setNewCatType] = useState("expense");
   const [newCatName, setNewCatName] = useState("");
@@ -969,8 +1086,78 @@ useEffect(() => {
   }
 }, [newRecurring.isInstallment, newRecurring.principal, newRecurring.cycleCount]);
 
- async function saveTx() {
+    async function saveTx() {
   if (!form.amount || Number(form.amount) <= 0) return;
+
+  if (entryType === "expense" && isSplitEntry && editingGroupId) {
+    const splitSum = splitLines.reduce((s, l) => s + (Number(l.amount) || 0), 0);
+    const valid = splitSum === Number(form.amount) && splitLines.every((l) => Number(l.amount) > 0 && l.category);
+    if (!valid) { showToast("Tổng các khoản phải khớp với tổng hóa đơn"); return; }
+
+    const keptIds = splitLines.map((l) => l.id).filter((id) => originalSplitIds.includes(id));
+    const removedIds = originalSplitIds.filter((id) => !keptIds.includes(id));
+    const newLines = splitLines.filter((l) => !originalSplitIds.includes(l.id));
+    const updatedLines = splitLines.filter((l) => originalSplitIds.includes(l.id));
+
+    if (removedIds.length) {
+      const { error } = await supabase.from("transactions").delete().in("id", removedIds);
+      if (error) { console.error(error); showToast("Không xóa được khoản cũ"); return; }
+    }
+
+    let updatedRows = [];
+    for (const l of updatedLines) {
+      const payload = txToDb({
+        type: "expense", date: form.date, amount: Number(l.amount), category: l.category,
+        member: l.member, accountId: form.accountId, vendor: form.vendor, note: l.note || form.note,
+        splitGroupId: editingGroupId,
+      });
+      const { data, error } = await supabase.from("transactions").update(payload).eq("id", l.id).select().single();
+      if (error) { console.error(error); showToast("Không cập nhật được 1 khoản"); return; }
+      updatedRows.push(data);
+    }
+
+    let insertedRows = [];
+    if (newLines.length) {
+      const payloads = newLines.map((l) => txToDb({
+        type: "expense", date: form.date, amount: Number(l.amount), category: l.category,
+        member: l.member, accountId: form.accountId, vendor: form.vendor, note: l.note || form.note,
+        splitGroupId: editingGroupId,
+      }));
+      const { data, error } = await supabase.from("transactions").insert(payloads).select();
+      if (error) { console.error(error); showToast("Không thêm được khoản mới"); return; }
+      insertedRows = data;
+    }
+
+    setTxs((prev) => {
+      const withoutOld = prev.filter((t) => !originalSplitIds.includes(t.id));
+      return [...insertedRows.map(txFromDb), ...updatedRows.map(txFromDb), ...withoutOld];
+    });
+    resetEntryForm();
+    showToast("Đã cập nhật hóa đơn gộp");
+    setEntryOpen(false);
+    return;
+  }
+
+  if (entryType === "expense" && isSplitEntry && !editingId && !editingGroupId) {
+    const splitSum = splitLines.reduce((s, l) => s + (Number(l.amount) || 0), 0);
+    const valid = splitSum === Number(form.amount) && splitLines.every((l) => Number(l.amount) > 0 && l.category);
+    if (!valid) { showToast("Tổng các khoản phải khớp với tổng hóa đơn"); return; }
+
+    const groupId = crypto.randomUUID();
+    const payloads = splitLines.map((l) => txToDb({
+      type: "expense", date: form.date, amount: Number(l.amount), category: l.category,
+      member: l.member, accountId: form.accountId, vendor: form.vendor, note: l.note || form.note,
+      splitGroupId: groupId,
+    }));
+    const { data, error } = await supabase.from("transactions").insert(payloads).select();
+    if (error) { console.error(error); showToast("Không lưu được hóa đơn gộp"); return; }
+    setTxs((prev) => [...data.map(txFromDb), ...prev]);
+    resetEntryForm();
+    showToast(`Đã lưu hóa đơn gộp (${payloads.length} khoản)`);
+    setEntryOpen(false);
+    return;
+  }
+
   let payload;
   if (entryType === "transfer") {
     if (form.fromAccountId === form.toAccountId) return;
@@ -1007,7 +1194,7 @@ useEffect(() => {
     setTimeout(() => setToast(""), 2000);
   }
 
-  function startEditTx(t) {
+    function startEditTx(t) {
     setEditingId(t.id);
     setEntryType(t.type);
     setForm({
@@ -1018,14 +1205,36 @@ useEffect(() => {
     setEntryOpen(true);
   }
 
+  function startEditSplitGroup(group) {
+    const total = group.items.reduce((s, t) => s + t.amount, 0);
+    setEditingId(null);
+    setEditingGroupId(group.id);
+    setOriginalSplitIds(group.items.map((t) => t.id));
+    setEntryType("expense");
+    setIsSplitEntry(true);
+    setForm({
+      date: group.items[0].date, amount: String(total), category: "", member: "",
+      accountId: group.accountId || "", vendor: group.vendor || "", note: group.note || "",
+      fromAccountId: "", toAccountId: "",
+    });
+    setSplitLines(group.items.map((t) => ({
+      id: t.id, category: t.category || "", member: t.member || "", amount: String(t.amount), note: t.note || "",
+    })));
+    setEntryOpen(true);
+  }
+
   function resetEntryForm() {
     setEditingId(null);
+    setEditingGroupId(null);
+    setOriginalSplitIds([]);
     setEntryType("expense");
     setForm({
       date: todayISO(), amount: "", category: "", member: members[0] || "",
       accountId: accounts[0]?.id || "", vendor: "", note: "",
       fromAccountId: accounts[0]?.id || "", toAccountId: accounts[1]?.id || accounts[0]?.id || "",
     });
+    setIsSplitEntry(false);
+    setSplitLines([{ id: "l0", category: expenseCats[0] || "", member: members[0] || "", amount: "", note: "" }]);
   }
 
   async function removeCategory(name, type) {
@@ -1427,12 +1636,38 @@ const reconcile = useMemo(() => {
       return t.accountId === acc.id || (t.toAccountId === acc.id && t.type === "transfer");
     });
 
-    const toItem = (t) => {
+        const toItem = (t) => {
       const isPayment = (t.accountId === acc.id && t.type === "income") || (t.toAccountId === acc.id && t.type === "transfer");
       return { label: `${fmtDate(t.date)} · ${t.note || t.vendor || t.category || "—"}`, amount: t.amount, sign: isPayment ? "-" : "+", tx: t };
     };
 
+    const toItemsGrouped = (list) => {
+      const seen = new Map();
+      const result = [];
+      list.forEach((t) => {
+        if (!t.splitGroupId) { result.push(toItem(t)); return; }
+        if (seen.has(t.splitGroupId)) {
+          const g = seen.get(t.splitGroupId);
+          g.amount += t.amount;
+          g.children.push(toItem(t));
+        } else {
+          const isPayment = (t.accountId === acc.id && t.type === "income") || (t.toAccountId === acc.id && t.type === "transfer");
+          const g = {
+            label: `${fmtDate(t.date)} · ${t.vendor || t.note || "Hóa đơn gộp"}`,
+            amount: t.amount,
+            sign: isPayment ? "-" : "+",
+            isGroup: true,
+            children: [toItem(t)],
+          };
+          seen.set(t.splitGroupId, g);
+          result.push(g);
+        }
+      });
+      return result;
+    };
+
     const closingBalance = Math.max(0, -balanceAsOf(cutoffStr));
+    
     const cycleTxs = txsInRange(prevCutoffStr, cutoffStr);
 
     const paymentsAfterClosingTxs = txsInRange(cutoffStr, toISODate(new Date(dueDate.getFullYear(), dueDate.getMonth(), dueDate.getDate() + 1))).filter((t) =>
@@ -1457,11 +1692,11 @@ const reconcile = useMemo(() => {
 
     const available = (acc.creditLimit || 0) - currentBalance - installmentBalance;
 
-    return {
+        return {
       acc, cutoff, dueDate,
-      closingBalance, cycleItems: cycleTxs.map(toItem),
-      tbgdRemaining, tbgdItems: [...cycleTxs.map(toItem), ...paymentsAfterClosingTxs.map(toItem)],
-      currentBalance, currentItems: currentTxs.map(toItem),
+      closingBalance, cycleItems: toItemsGrouped(cycleTxs),
+      tbgdRemaining, tbgdItems: toItemsGrouped([...cycleTxs, ...paymentsAfterClosingTxs]),
+      currentBalance, currentItems: toItemsGrouped(currentTxs),
       installmentBalance, installmentItems,
       available,
       duePayment: closingBalance,
@@ -1577,7 +1812,7 @@ const reconcile = useMemo(() => {
       });
     }, [txs, txPeriod, searchQuery]);
 
-  const recentListByDate = useMemo(() => {
+    const recentListByDate = useMemo(() => {
     const groups = [];
     const map = {};
     recentList.forEach((t) => {
@@ -1589,8 +1824,26 @@ const reconcile = useMemo(() => {
       if (t.type === "income") map[t.date].income += t.amount;
       if (t.type === "expense") map[t.date].expense += t.amount;
     });
+
+    groups.forEach((day) => {
+      const seen = new Map();
+      const merged = [];
+      day.txs.forEach((t) => {
+        if (!t.splitGroupId) { merged.push(t); return; }
+        if (seen.has(t.splitGroupId)) {
+          seen.get(t.splitGroupId).items.push(t);
+        } else {
+          const acc = accById(t.accountId);
+          const g = { isGroup: true, id: t.splitGroupId, accountId: t.accountId, accName: acc?.name, accType: acc?.type, vendor: t.vendor, note: t.note, items: [t] };
+          seen.set(t.splitGroupId, g);
+          merged.push(g);
+        }
+      });
+      day.txs = merged;
+    });
+
     return groups;
-  }, [recentList]);
+  }, [recentList, accounts]);
 
   const inputStyle = `
   * { box-sizing: border-box; }
@@ -1715,6 +1968,7 @@ const reconcile = useMemo(() => {
         </div>
             <div style={{ padding: "0 12px" }}>
                 {day.txs.map((t) => {
+                if (t.isGroup) return <SplitGroupRow key={t.id} group={t} onEditTx={setDetailTx} onEditGroup={startEditSplitGroup} />;
                   const acc = accById(t.accountId);
                   const color = t.type === "income" ? COLORS.accent : t.type === "transfer" ? COLORS.transfer : COLORS.expense;
                   const sign = t.type === "income" ? "+" : t.type === "transfer" ? "" : "-";
@@ -1951,10 +2205,10 @@ const reconcile = useMemo(() => {
 
           {reportView === "taikhoan" && (
             <div className="space-y-2">
-              {accounts.map((a) => {
+                {accounts.map((a) => {
                 const d = byAccount[a.id] || { income: 0, expense: 0 };
-                const txList = filteredTxs.filter((t) => t.accountId === a.id || t.toAccountId === a.id);
-                return <AccountReportCard key={a.id} account={a} data={d} balance={balances[a.id] || 0} txList={txList} onEditTx={setDetailTx} />;
+                const txList = groupSplitTxs(filteredTxs.filter((t) => t.accountId === a.id || t.toAccountId === a.id));
+                return <AccountReportCard key={a.id} account={a} data={d} balance={balances[a.id] || 0} txList={txList} onEditTx={setDetailTx} onEditGroup={startEditSplitGroup} />;
               })}
             </div>
           )}
@@ -2390,9 +2644,74 @@ const reconcile = useMemo(() => {
                   <input type="date" value={form.date} onChange={(e) => setForm({ ...form, date: e.target.value })} />
                 </div>
               </div>
-              <div><label className="lbl">Số tiền</label><AmountInput value={form.amount} onChange={(v) => setForm({ ...form, amount: v })} /></div>
+                            <div><label className="lbl">{isSplitEntry ? "Tổng số tiền hóa đơn" : "Số tiền"}</label><AmountInput value={form.amount} onChange={(v) => setForm({ ...form, amount: v })} /></div>
 
-              {entryType === "transfer" ? (
+              {entryType === "expense" && !editingId && (
+                <label className="sans text-xs flex items-center gap-2" style={{ color: COLORS.textSecondary }}>
+                  <input type="checkbox" checked={isSplitEntry} onChange={(e) => setIsSplitEntry(e.target.checked)} style={{ width: "auto" }} />
+                  Hóa đơn gộp — tách thành nhiều danh mục/thành viên
+                </label>
+              )}
+
+              {entryType === "expense" && isSplitEntry && (!editingId || editingGroupId) ? (
+                 <>
+                  <div className="flex gap-2">
+                    <div className="flex-1"><label className="lbl">Tài khoản</label>
+                      <select value={form.accountId} onChange={(e) => setForm({ ...form, accountId: e.target.value })}>
+                        {accounts.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
+                      </select>
+                    </div>
+                    <div className="flex-1"><label className="lbl">NCC (chung cả hóa đơn)</label>
+                      <input value={form.vendor} onChange={(e) => setForm({ ...form, vendor: e.target.value })} placeholder="VD: Coopmart" />
+                    </div>
+                  </div>
+
+                  {(() => {
+                    const splitSum = splitLines.reduce((s, l) => s + (Number(l.amount) || 0), 0);
+                    const remaining = (Number(form.amount) || 0) - splitSum;
+                    return (
+                      <div>
+                        <div className="flex items-center justify-between mb-2">
+                          <p className="sans text-xs" style={{ color: COLORS.textSecondary }}>Tách khoản</p>
+                          <span className="mono text-xs" style={{ color: remaining === 0 ? COLORS.accent : COLORS.expense }}>Còn lại: {fmtVND(remaining)}</span>
+                        </div>
+                        <div className="space-y-2">
+                          {splitLines.map((l, i) => (
+                            <div key={l.id} className="rounded-lg p-2.5" style={{ background: COLORS.surface2, border: "1px solid " + COLORS.border }}>
+                              <div className="flex items-center justify-between mb-2">
+                                <span className="sans text-xs" style={{ color: COLORS.textMuted }}>Khoản {i + 1}</span>
+                                <button onClick={() => setSplitLines((ls) => ls.length > 1 ? ls.filter((x) => x.id !== l.id) : ls)} style={{ color: COLORS.expense }}><Trash2 size={13} /></button>
+                              </div>
+                              <div className="chip-row flex gap-2 mb-2" style={{ overflowX: "auto" }}>
+                                {expenseCats.map((c) => (
+                                  <Chip key={c} label={c} active={l.category === c} onClick={() => setSplitLines((ls) => ls.map((x) => x.id === l.id ? { ...x, category: c } : x))} />
+                                ))}
+                              </div>
+                              <div className="mb-2">
+                                <AmountInput value={l.amount} onChange={(v) => setSplitLines((ls) => ls.map((x) => x.id === l.id ? { ...x, amount: v } : x))} placeholder="Số tiền" />
+                              </div>
+                              <div className="mb-2">
+                                <select value={l.member} onChange={(e) => setSplitLines((ls) => ls.map((x) => x.id === l.id ? { ...x, member: e.target.value } : x))}>
+                                  {members.map((m) => <option key={m} value={m}>{m}</option>)}
+                                </select>
+                              </div>
+                              <input value={l.note} onChange={(e) => setSplitLines((ls) => ls.map((x) => x.id === l.id ? { ...x, note: e.target.value } : x))} placeholder="Ghi chú khoản này" />
+                            </div>
+                          ))}
+                        </div>
+                        <button
+                          onClick={() => setSplitLines((ls) => [...ls, { id: "l" + ls.length + Date.now(), category: expenseCats[0] || "", member: members[0] || "", amount: remaining > 0 ? String(remaining) : "", note: "" }])}
+                          className="sans text-xs mt-2 w-full py-2 rounded-md flex items-center justify-center gap-1.5"
+                          style={{ border: "1px dashed " + COLORS.border, color: COLORS.textSecondary }}
+                        >
+                          <Plus size={13} /> Thêm khoản
+                        </button>
+                      </div>
+                    );
+                  })()}
+                </>
+              ) : entryType === "transfer" ? (
+              
                 <>
                   <div className="flex items-center gap-2">
                     <div className="flex-1"><label className="lbl">Từ tài khoản</label>
@@ -2500,7 +2819,20 @@ const reconcile = useMemo(() => {
                   {detailTx.note && <div className="flex justify-between"><span style={{ color: COLORS.textMuted }}>Ghi chú</span><span style={{ textAlign: "right", maxWidth: "60%" }}>{detailTx.note}</span></div>}
                 </div>
                 <div className="flex gap-2 mt-5">
-                  <button onClick={() => { setDetailTx(null); startEditTx(detailTx); }} className="flex-1 py-2.5 rounded-md sans text-sm flex items-center justify-center gap-2" style={{ border: "1px solid " + COLORS.cream, color: COLORS.cream }}>
+                  <button onClick={() => {
+                    setDetailTx(null);
+                    if (detailTx.splitGroupId) {
+                      const items = txs.filter((x) => x.splitGroupId === detailTx.splitGroupId);
+                      const acc = accById(detailTx.accountId);
+                      startEditSplitGroup({
+                        id: detailTx.splitGroupId, accountId: detailTx.accountId,
+                        accName: acc?.name, accType: acc?.type,
+                        vendor: detailTx.vendor, note: detailTx.note, items,
+                      });
+                    } else {
+                      startEditTx(detailTx);
+                    }
+                  }} className="flex-1 py-2.5 rounded-md sans text-sm flex items-center justify-center gap-2" style={{ border: "1px solid " + COLORS.cream, color: COLORS.cream }}>
                     <Pencil size={14} /> Sửa
                   </button>
                   <button onClick={() => { setDetailTx(null); removeTx(detailTx.id); }} className="flex-1 py-2.5 rounded-md sans text-sm flex items-center justify-center gap-2" style={{ border: "1px solid " + COLORS.expense, color: COLORS.expense }}>
