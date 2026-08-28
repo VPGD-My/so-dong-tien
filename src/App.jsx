@@ -44,6 +44,7 @@ function txFromDb(row) {
     note: row.note,
     recurringId: row.recurring_id,       // ← thêm dòng này
     splitGroupId: row.split_group_id,    // ← thêm dòng này
+    refundForTxId: row.refund_for_tx_id, // ← thêm dòng này
   };
 }
 
@@ -60,6 +61,7 @@ function txToDb(t) {
     note: t.note || null,
     recurring_id: t.recurringId || null,  // ← thêm dòng này
     split_group_id: t.splitGroupId || null, // ← thêm dòng này
+    refund_for_tx_id: t.refundForTxId || null, // ← thêm dòng này
   };
 }
 
@@ -462,8 +464,26 @@ function MetricCard({ label, value, color }) {
   );
 }
 
- function CategoryRow({ label, amount, max, color, txList, onEditTx }) {
-    const [open, setOpen] = useState(false);
+  function RefundBadge({ info }) {
+  if (!info) return null;
+  return (
+    <span style={{ background: "rgba(123,174,111,0.15)", color: COLORS.accent, fontSize: 10, padding: "1px 6px", borderRadius: 20, flexShrink: 0 }}>
+      {info.isFull ? "Đã hoàn" : "Hoàn 1 phần"}
+    </span>
+  );
+}
+
+function RefundInline({ info, onEditTx }) {
+  if (!info || !info.showDetail) return null;
+  return info.list.map((r) => (
+    <div key={r.id} className="flex justify-end sans" style={{ color: COLORS.accent, fontSize: 11, cursor: "pointer" }} onClick={(e) => { e.stopPropagation(); onEditTx && onEditTx(r); }}>
+      <span>{fmtVND(r.amount)} đã hoàn{r.diffAccountName ? ` vào ${r.diffAccountName}` : ""} · {fmtDate(r.date)}</span>
+    </div>
+  ));
+}
+
+ function CategoryRow({ label, amount, max, color, txList, onEditTx, refundMap }) {
+  const [open, setOpen] = useState(false);
     return (
       <div className="mb-2">
         <div className="flex items-center gap-3" style={{ cursor: "pointer" }} onClick={() => setOpen(!open)}>
@@ -475,12 +495,18 @@ function MetricCard({ label, value, color }) {
         </div>
         {open && (
           <div className="pl-2 mt-1.5 space-y-1">
-            {txList.map((t) => (
-              <div key={t.id} className="flex justify-between sans text-xs" style={{ color: COLORS.textMuted, cursor: "pointer" }} onClick={(e) => { e.stopPropagation(); onEditTx && onEditTx(t); }}>
-                <span>{fmtDate(t.date)} · {t.note || t.vendor || "—"}</span>
-                <span className="mono">{fmtVND(t.amount)}</span>
-              </div>
-            ))}
+            {txList.map((t) => {
+              const info = refundMap && refundMap[t.id];
+              return (
+                <div key={t.id}>
+                  <div className="flex justify-between sans text-xs" style={{ color: COLORS.textMuted, cursor: "pointer" }} onClick={(e) => { e.stopPropagation(); onEditTx && onEditTx(t); }}>
+                    <span style={{ display: "flex", alignItems: "center", gap: 6 }}>{fmtDate(t.date)} · {t.note || t.vendor || "—"} <RefundBadge info={info} /></span>
+                    <span className="mono" style={{ textDecoration: info?.isFull ? "line-through" : "none" }}>{fmtVND(t.amount)}</span>
+                  </div>
+                  <RefundInline info={info} onEditTx={onEditTx} />
+                </div>
+              );
+            })}
             {txList.length === 0 && <p className="sans text-xs" style={{ color: COLORS.textMuted }}>Không có giao dịch.</p>}
           </div>
         )}
@@ -492,13 +518,16 @@ function ReconcileItemRow({ it, onSelectTx }) {
   const [open, setOpen] = useState(false);
   if (!it.isGroup) {
     return (
-      <div
-        className="flex justify-between sans text-xs"
-        style={{ color: COLORS.textMuted, cursor: it.tx ? "pointer" : "default" }}
-        onClick={(e) => { e.stopPropagation(); it.tx && onSelectTx && onSelectTx(it.tx); }}
-      >
-        <span>{it.label}</span>
-        <span className="mono" style={{ color: it.sign === "-" ? COLORS.accent : COLORS.textMuted }}>{it.sign === "-" ? "− " : "+ "}{fmtVND(it.amount)}</span>
+      <div>
+        <div
+          className="flex justify-between sans text-xs"
+          style={{ color: COLORS.textMuted, cursor: it.tx ? "pointer" : "default" }}
+          onClick={(e) => { e.stopPropagation(); it.tx && onSelectTx && onSelectTx(it.tx); }}
+        >
+          <span style={{ display: "flex", alignItems: "center", gap: 6 }}>{it.label} <RefundBadge info={it.refundInfo} /></span>
+          <span className="mono" style={{ color: it.sign === "-" ? COLORS.accent : COLORS.textMuted, textDecoration: it.refundInfo?.isFull ? "line-through" : "none" }}>{it.sign === "-" ? "− " : "+ "}{fmtVND(it.amount)}</span>
+        </div>
+        <RefundInline info={it.refundInfo} onEditTx={onSelectTx} />
       </div>
     );
   }
@@ -508,17 +537,19 @@ function ReconcileItemRow({ it, onSelectTx }) {
         <span>{it.label} <span style={{ fontSize: 10 }}>· {it.children.length} khoản</span></span>
         <span className="mono" style={{ color: it.sign === "-" ? COLORS.accent : COLORS.textMuted }}>{it.sign === "-" ? "− " : "+ "}{fmtVND(it.amount)}</span>
       </div>
-            {open && (
+      {open && (
         <div className="mt-1 space-y-1" style={{ paddingLeft: 10, borderLeft: "2px solid " + COLORS.border }}>
           {it.children.map((c, i) => (
-            <div
-              key={i}
-              className="flex justify-between sans text-xs"
-              style={{ color: COLORS.textSecondary, cursor: c.tx ? "pointer" : "default" }}
-              onClick={(e) => { e.stopPropagation(); c.tx && onSelectTx && onSelectTx(c.tx); }}
-            >
-              <span>{c.label}</span>
-              <span className="mono" style={{ color: COLORS.cream }}>{fmtVND(c.amount)}</span>
+            <div key={i}>
+              <div
+                className="flex justify-between sans text-xs"
+                style={{ color: COLORS.textSecondary, cursor: c.tx ? "pointer" : "default" }}
+                onClick={(e) => { e.stopPropagation(); c.tx && onSelectTx && onSelectTx(c.tx); }}
+              >
+                <span style={{ display: "flex", alignItems: "center", gap: 6 }}>{c.label} <RefundBadge info={c.refundInfo} /></span>
+                <span className="mono" style={{ color: COLORS.cream, textDecoration: c.refundInfo?.isFull ? "line-through" : "none" }}>{fmtVND(c.amount)}</span>
+              </div>
+              <RefundInline info={c.refundInfo} onEditTx={onSelectTx} />
             </div>
           ))}
         </div>
@@ -607,8 +638,7 @@ function RecurringItemCard({ r, acc, done, pending, txList, unitLabel, onEdit, o
   );
 }
 
-function AccountGroupRow({ group, onEditTx, onEditGroup }) {
-  const [open, setOpen] = useState(false);
+function AccountGroupRow({ group, onEditTx, onEditGroup, refundMap }) {  const [open, setOpen] = useState(false);
   const total = group.items.reduce((s, t) => s + t.amount, 0);
   return (
     <div>
@@ -616,21 +646,27 @@ function AccountGroupRow({ group, onEditTx, onEditGroup }) {
         <span>{fmtDate(group.items[0].date)} · {group.vendor || group.note || "Hóa đơn gộp"} <span style={{ fontSize: 10 }}>· {group.items.length} khoản</span></span>
         <span className="mono" style={{ color: COLORS.expense }}>-{fmtVND(total)}</span>
       </div>
-      {open && (
+            {open && (
         <div className="mt-1 space-y-1" style={{ paddingLeft: 10, borderLeft: "2px solid " + COLORS.border }}>
-          {group.items.map((t) => (
-            <div key={t.id} className="flex justify-between sans text-xs" style={{ color: COLORS.textSecondary, cursor: "pointer" }} onClick={(e) => { e.stopPropagation(); onEditTx && onEditTx(t); }}>
-              <span>{t.category}{t.note ? ` · ${t.note}` : ""}</span>
-              <span className="mono" style={{ color: COLORS.cream }}>{fmtVND(t.amount)}</span>
-            </div>
-          ))}
+          {group.items.map((t) => {
+            const info = refundMap && refundMap[t.id];
+            return (
+              <div key={t.id}>
+                <div className="flex justify-between sans text-xs" style={{ color: COLORS.textSecondary, cursor: "pointer" }} onClick={(e) => { e.stopPropagation(); onEditTx && onEditTx(t); }}>
+                  <span style={{ display: "flex", alignItems: "center", gap: 6 }}>{t.member || "Chưa gán thành viên"}{t.note ? ` · ${t.note}` : ""} <RefundBadge info={info} /></span>
+                  <span className="mono" style={{ color: COLORS.cream, textDecoration: info?.isFull ? "line-through" : "none" }}>{fmtVND(t.amount)}</span>
+                </div>
+                <RefundInline info={info} onEditTx={onEditTx} />
+              </div>
+            );
+          })}
         </div>
       )}
     </div>
   );
 }
 
-function AccountReportCard({ account, data, balance, txList, onEditTx, onEditGroup }) {
+function AccountReportCard({ account, data, balance, txList, onEditTx, onEditGroup, refundMap }) {
   const [open, setOpen] = useState(false);
   return (
     <div className="rounded-lg p-3" style={{ background: COLORS.surface, border: "1px solid " + COLORS.border, cursor: "pointer" }} onClick={() => setOpen(!open)}>
@@ -642,18 +678,21 @@ function AccountReportCard({ account, data, balance, txList, onEditTx, onEditGro
       </div>
       {open && (
         <div className="mt-2 pt-2 space-y-1" style={{ borderTop: "1px dashed " + COLORS.border }} onClick={(e) => e.stopPropagation()}>
-          {txList.map((t) => (
-            t.isGroup ? (
-              <AccountGroupRow key={t.id} group={t} onEditTx={onEditTx} onEditGroup={onEditGroup} />
-            ) : (
-              <div key={t.id} className="flex justify-between sans text-xs" style={{ color: COLORS.textMuted, cursor: "pointer" }} onClick={() => onEditTx && onEditTx(t)}>
-                <span>{fmtDate(t.date)} · {t.category || (t.type === "transfer" ? "Chuyển khoản" : "—")}{t.note ? ` · ${t.note}` : ""}</span>
-                <span className="mono" style={{ color: t.type === "income" ? COLORS.accent : t.type === "transfer" ? COLORS.transfer : COLORS.expense, flexShrink: 0, marginLeft: 8 }}>
-                  {t.type === "income" ? "+" : t.type === "transfer" ? "" : "-"}{fmtVND(t.amount)}
-                </span>
+          {txList.map((t) => {
+            if (t.isGroup) return <AccountGroupRow key={t.id} group={t} onEditTx={onEditTx} onEditGroup={onEditGroup} refundMap={refundMap} />;
+            const info = t.type === "expense" && refundMap && refundMap[t.id];
+            return (
+              <div key={t.id}>
+                <div className="flex justify-between sans text-xs" style={{ color: COLORS.textMuted, cursor: "pointer" }} onClick={() => onEditTx && onEditTx(t)}>
+                  <span style={{ display: "flex", alignItems: "center", gap: 6 }}>{fmtDate(t.date)} · {t.category || (t.type === "transfer" ? "Chuyển khoản" : "—")}{t.note ? ` · ${t.note}` : ""} <RefundBadge info={info} /></span>
+                  <span className="mono" style={{ color: t.type === "income" ? COLORS.accent : t.type === "transfer" ? COLORS.transfer : COLORS.expense, flexShrink: 0, marginLeft: 8, textDecoration: info?.isFull ? "line-through" : "none" }}>
+                    {t.type === "income" ? "+" : t.type === "transfer" ? "" : "-"}{fmtVND(t.amount)}
+                  </span>
+                </div>
+                <RefundInline info={info} onEditTx={onEditTx} />
               </div>
-            )
-          ))}
+            );
+          })}
           {txList.length === 0 && <p className="sans text-xs" style={{ color: COLORS.textMuted }}>Không có giao dịch.</p>}
         </div>
       )}
@@ -661,7 +700,7 @@ function AccountReportCard({ account, data, balance, txList, onEditTx, onEditGro
   );
 }
 
-function MemberReportCard({ member, data, txList, onEditTx }) {
+function MemberReportCard({ member, data, txList, onEditTx, refundMap }) {
   const [open, setOpen] = useState(false);
   return (
     <div className="rounded-lg p-3" style={{ background: COLORS.surface, border: "1px solid " + COLORS.border, cursor: "pointer" }} onClick={() => setOpen(!open)}>
@@ -672,14 +711,20 @@ function MemberReportCard({ member, data, txList, onEditTx }) {
       </div>
       {open && (
         <div className="mt-2 pt-2 space-y-1" style={{ borderTop: "1px dashed " + COLORS.border }}>
-          {txList.map((t) => (
-            <div key={t.id} className="flex justify-between sans text-xs" style={{ color: COLORS.textMuted, cursor: "pointer" }} onClick={(e) => { e.stopPropagation(); onEditTx && onEditTx(t); }}>
-              <span>{fmtDate(t.date)} · {t.category}{t.note ? ` · ${t.note}` : ""}</span>
-              <span className="mono" style={{ color: t.type === "income" ? COLORS.accent : COLORS.expense, flexShrink: 0, marginLeft: 8 }}>
-                {t.type === "income" ? "+" : "-"}{fmtVND(t.amount)}
-              </span>
-            </div>
-          ))}
+          {txList.map((t) => {
+            const info = t.type === "expense" && refundMap && refundMap[t.id];
+            return (
+              <div key={t.id}>
+                <div className="flex justify-between sans text-xs" style={{ color: COLORS.textMuted, cursor: "pointer" }} onClick={(e) => { e.stopPropagation(); onEditTx && onEditTx(t); }}>
+                  <span style={{ display: "flex", alignItems: "center", gap: 6 }}>{fmtDate(t.date)} · {t.category}{t.note ? ` · ${t.note}` : ""} <RefundBadge info={info} /></span>
+                  <span className="mono" style={{ color: t.type === "income" ? COLORS.accent : COLORS.expense, flexShrink: 0, marginLeft: 8, textDecoration: info?.isFull ? "line-through" : "none" }}>
+                    {t.type === "income" ? "+" : "-"}{fmtVND(t.amount)}
+                  </span>
+                </div>
+                <RefundInline info={info} onEditTx={onEditTx} />
+              </div>
+            );
+          })}
           {txList.length === 0 && <p className="sans text-xs" style={{ color: COLORS.textMuted }}>Không có giao dịch.</p>}
         </div>
       )}
@@ -891,7 +936,7 @@ function BudgetPaceView({ budgets, currentMonthExpenseByCat, lastMonthExpenseByC
   );
 }
 
-function SplitGroupRow({ group, onEditTx, onEditGroup }) {
+function SplitGroupRow({ group, onEditTx, onEditGroup, refundMap }) {
   const [open, setOpen] = useState(false);
   const total = group.items.reduce((s, t) => s + t.amount, 0);
   return (
@@ -913,14 +958,20 @@ function SplitGroupRow({ group, onEditTx, onEditGroup }) {
           <span className="sans text-xs" style={{ color: COLORS.textMuted }}>{group.accName}</span>
         </div>
       </div>
-      {open && (
-        <div className="space-y-1 pb-2" style={{ paddingLeft: 12 }}>
-          {group.items.map((t) => (
-            <div key={t.id} className="flex justify-between sans text-xs" style={{ color: COLORS.textMuted, cursor: "pointer" }} onClick={(e) => { e.stopPropagation(); onEditTx(t); }}>
-              <span>{t.category}{t.member ? " · " + t.member : ""}{t.note ? " · " + t.note : ""}</span>
-              <span className="mono" style={{ color: COLORS.textSecondary }}>{fmtVND(t.amount)}</span>
-            </div>
-          ))}
+            {open && (
+        <div className="mt-2 pt-2 space-y-1" style={{ borderTop: "1px dashed " + COLORS.border }}>
+          {group.items.map((t) => {
+            const info = refundMap && refundMap[t.id];
+            return (
+              <div key={t.id}>
+                <div className="flex justify-between sans text-xs" style={{ color: COLORS.textMuted, cursor: "pointer" }} onClick={(e) => { e.stopPropagation(); onEditTx && onEditTx(t); }}>
+                  <span style={{ display: "flex", alignItems: "center", gap: 6 }}>{t.member || "Chưa gán thành viên"}{t.note ? " · " + t.note : ""} <RefundBadge info={info} /></span>
+                  <span className="mono" style={{ textDecoration: info?.isFull ? "line-through" : "none" }}>{fmtVND(t.amount)}</span>
+                </div>
+                <RefundInline info={info} onEditTx={onEditTx} />
+              </div>
+            );
+          })}
         </div>
       )}
     </div>
@@ -987,7 +1038,9 @@ export default function App() {
     });
   const [isSplitEntry, setIsSplitEntry] = useState(false);
   const [splitLines, setSplitLines] = useState([{ id: "l0", category: "", member: "", amount: "", note: "" }]);
-
+  const [isRefundEntry, setIsRefundEntry] = useState(false);
+  const [refundForTxId, setRefundForTxId] = useState(null);
+  const [refundSearchQuery, setRefundSearchQuery] = useState("");
   const [newCatType, setNewCatType] = useState("expense");
   const [newCatName, setNewCatName] = useState("");
   const [newVendorName, setNewVendorName] = useState("");
@@ -1163,7 +1216,7 @@ useEffect(() => {
     if (form.fromAccountId === form.toAccountId) return;
     payload = txToDb({ type: "transfer", date: form.date, amount: Number(form.amount), accountId: form.fromAccountId, toAccountId: form.toAccountId, note: form.note });
   } else {
-    payload = txToDb({ type: entryType, date: form.date, amount: Number(form.amount), category: form.category, member: form.member, accountId: form.accountId, vendor: form.vendor, note: form.note });
+    payload = txToDb({ type: entryType, date: form.date, amount: Number(form.amount), category: form.category, member: form.member, accountId: form.accountId, vendor: form.vendor, note: form.note, refundForTxId: entryType === "income" ? refundForTxId : null });
   }
   if (editingId) {
     const { data, error } = await supabase.from("transactions").update(payload).eq("id", editingId).select().single();
@@ -1194,7 +1247,7 @@ useEffect(() => {
     setTimeout(() => setToast(""), 2000);
   }
 
-    function startEditTx(t) {
+      function startEditTx(t) {
     setEditingId(t.id);
     setEntryType(t.type);
     setForm({
@@ -1202,6 +1255,8 @@ useEffect(() => {
       accountId: t.accountId || "", vendor: t.vendor || "", note: t.note || "",
       fromAccountId: t.accountId || "", toAccountId: t.toAccountId || "",
     });
+    setRefundForTxId(t.refundForTxId || null);
+    setIsRefundEntry(!!t.refundForTxId);
     setEntryOpen(true);
   }
 
@@ -1233,8 +1288,11 @@ useEffect(() => {
       accountId: accounts[0]?.id || "", vendor: "", note: "",
       fromAccountId: accounts[0]?.id || "", toAccountId: accounts[1]?.id || accounts[0]?.id || "",
     });
-    setIsSplitEntry(false);
+        setIsSplitEntry(false);
     setSplitLines([{ id: "l0", category: expenseCats[0] || "", member: members[0] || "", amount: "", note: "" }]);
+    setIsRefundEntry(false);
+    setRefundForTxId(null);
+    setRefundSearchQuery("");
   }
 
   async function removeCategory(name, type) {
@@ -1636,15 +1694,34 @@ const reconcile = useMemo(() => {
       return t.accountId === acc.id || (t.toAccountId === acc.id && t.type === "transfer");
     });
 
-        const toItem = (t) => {
-      const isPayment = (t.accountId === acc.id && t.type === "income") || (t.toAccountId === acc.id && t.type === "transfer");
-      return { label: `${fmtDate(t.date)} · ${t.note || t.vendor || t.category || "—"}`, amount: t.amount, sign: isPayment ? "-" : "+", tx: t };
-    };
-
     const toItemsGrouped = (list) => {
+      const refundsByOrig = {};
+      list.forEach((t) => {
+        if (t.type === "income" && t.refundForTxId) {
+          if (!refundsByOrig[t.refundForTxId]) refundsByOrig[t.refundForTxId] = [];
+          refundsByOrig[t.refundForTxId].push(t);
+        }
+      });
+
+      const buildRefundInfo = (t) => {
+        const raw = refundsByOrig[t.id];
+        if (!raw || raw.length === 0) return null;
+        const total = raw.reduce((s, r) => s + r.amount, 0);
+        const isFull = total >= t.amount;
+        const withNames = raw.map((r) => ({ ...r, diffAccountName: r.accountId !== t.accountId ? (accById(r.accountId)?.name || "TK khác") : null }));
+        const sameAccountOnly = withNames.every((r) => !r.diffAccountName);
+        return { list: withNames, isFull, showDetail: !(isFull && sameAccountOnly && withNames.length === 1) };
+      };
+
+      const toItem = (t) => {
+        const isPayment = (t.accountId === acc.id && t.type === "income") || (t.toAccountId === acc.id && t.type === "transfer");
+        return { label: `${fmtDate(t.date)} · ${t.note || t.vendor || t.category || "—"}`, amount: t.amount, sign: isPayment ? "-" : "+", tx: t, refundInfo: buildRefundInfo(t) };
+      };
+
       const seen = new Map();
       const result = [];
       list.forEach((t) => {
+        if (t.type === "income" && t.refundForTxId) return; // hiển thị lồng vào giao dịch gốc bên dưới, không hiện riêng
         if (!t.splitGroupId) { result.push(toItem(t)); return; }
         if (seen.has(t.splitGroupId)) {
           const g = seen.get(t.splitGroupId);
@@ -1766,6 +1843,44 @@ const reconcile = useMemo(() => {
     return { exp, inc };
   }, [filteredTxs]);
 
+      const refundsByOriginalTxId = useMemo(() => {
+    const raw = {};
+    filteredTxs.filter((t) => t.type === "income" && t.refundForTxId).forEach((t) => {
+      if (!raw[t.refundForTxId]) raw[t.refundForTxId] = [];
+      raw[t.refundForTxId].push(t);
+    });
+    const g = {};
+    Object.entries(raw).forEach(([origId, refunds]) => {
+      const orig = txs.find((x) => x.id === origId);
+      if (!orig) return;
+      const total = refunds.reduce((s, r) => s + r.amount, 0);
+      const isFull = total >= orig.amount;
+      const withNames = refunds.map((r) => ({ ...r, diffAccountName: r.accountId !== orig.accountId ? (accById(r.accountId)?.name || "TK khác") : null }));
+      const sameAccountOnly = withNames.every((r) => !r.diffAccountName);
+      g[origId] = { list: withNames, isFull, showDetail: !(isFull && sameAccountOnly && withNames.length === 1) };
+    });
+    return g;
+  }, [filteredTxs, txs, accounts]);
+
+    const refundsByOriginalTxIdAll = useMemo(() => {
+    const raw = {};
+    txs.filter((t) => t.type === "income" && t.refundForTxId).forEach((t) => {
+      if (!raw[t.refundForTxId]) raw[t.refundForTxId] = [];
+      raw[t.refundForTxId].push(t);
+    });
+    const g = {};
+    Object.entries(raw).forEach(([origId, refunds]) => {
+      const orig = txs.find((x) => x.id === origId);
+      if (!orig) return;
+      const total = refunds.reduce((s, r) => s + r.amount, 0);
+      const isFull = total >= orig.amount;
+      const withNames = refunds.map((r) => ({ ...r, diffAccountName: r.accountId !== orig.accountId ? (accById(r.accountId)?.name || "TK khác") : null }));
+      const sameAccountOnly = withNames.every((r) => !r.diffAccountName);
+      g[origId] = { list: withNames, isFull, showDetail: !(isFull && sameAccountOnly && withNames.length === 1) };
+    });
+    return g;
+  }, [txs, accounts]);
+
   const byVendor = useMemo(() => {
     const g = {};
     filteredTxs.filter((t) => t.type === "expense" && t.vendor).forEach((t) => {
@@ -1777,6 +1892,23 @@ const reconcile = useMemo(() => {
   const pieExpense = useMemo(() => Object.entries(byCategory.exp).map(([name, value]) => ({ name, value })), [byCategory]);
   const pieIncome = useMemo(() => Object.entries(byCategory.inc).map(([name, value]) => ({ name, value })), [byCategory]);
 
+  const refundCandidates = useMemo(() => {
+    const q = refundSearchQuery.trim().toLowerCase();
+    if (!q) return [];
+    const qDigits = q.replace(/[^\d]/g, "");
+    return txs
+      .filter((t) => t.type === "expense")
+      .filter((t) => {
+        const matchAmount = qDigits && String(t.amount).includes(qDigits);
+        const matchText = [t.note, t.category, t.vendor, t.member].some((f) => (f || "").toLowerCase().includes(q));
+        return matchText || matchAmount;
+      })
+      .sort((a, b) => (a.date < b.date ? 1 : -1))
+      .slice(0, 8);
+  }, [txs, refundSearchQuery]);
+
+  const selectedRefundTx = useMemo(() => txs.find((t) => t.id === refundForTxId) || null, [txs, refundForTxId]);
+  
   const currentMonthExpenseByCat = useMemo(() => {
   const key = monthKey(new Date(todayISO() + "T00:00:00"));
   const g = {};
@@ -1968,8 +2100,7 @@ const reconcile = useMemo(() => {
         </div>
             <div style={{ padding: "0 12px" }}>
                 {day.txs.map((t) => {
-                if (t.isGroup) return <SplitGroupRow key={t.id} group={t} onEditTx={setDetailTx} onEditGroup={startEditSplitGroup} />;
-                  const acc = accById(t.accountId);
+                  if (t.isGroup) return <SplitGroupRow key={t.id} group={t} onEditTx={setDetailTx} onEditGroup={startEditSplitGroup} refundMap={refundsByOriginalTxIdAll} />;                  const acc = accById(t.accountId);
                   const color = t.type === "income" ? COLORS.accent : t.type === "transfer" ? COLORS.transfer : COLORS.expense;
                   const sign = t.type === "income" ? "+" : t.type === "transfer" ? "" : "-";
                   return (
@@ -2036,7 +2167,7 @@ const reconcile = useMemo(() => {
                 {Object.entries(byCategory.exp).sort((a, b) => b[1] - a[1]).map(([cat, amt]) => {
                   const max = Math.max(...Object.values(byCategory.exp));
                   const txList = filteredTxs.filter((t) => t.type === "expense" && t.category === cat);
-                  return <CategoryRow key={cat} label={cat} amount={amt} max={max} color={COLORS.expense} txList={txList} onEditTx={setDetailTx} />;
+                  return <CategoryRow key={cat} label={cat} amount={amt} max={max} color={COLORS.expense} txList={txList} onEditTx={setDetailTx} refundMap={refundsByOriginalTxId} />;
                 })}
                 {pieExpense.length === 0 && <p className="sans text-xs" style={{ color: COLORS.textMuted }}>Không có dữ liệu trong khoảng ngày đã chọn.</p>}
               </div>
@@ -2208,7 +2339,7 @@ const reconcile = useMemo(() => {
                 {accounts.map((a) => {
                 const d = byAccount[a.id] || { income: 0, expense: 0 };
                 const txList = groupSplitTxs(filteredTxs.filter((t) => t.accountId === a.id || t.toAccountId === a.id));
-                return <AccountReportCard key={a.id} account={a} data={d} balance={balances[a.id] || 0} txList={txList} onEditTx={setDetailTx} onEditGroup={startEditSplitGroup} />;
+                return <AccountReportCard key={a.id} account={a} data={d} balance={balances[a.id] || 0} txList={txList} onEditTx={setDetailTx} onEditGroup={startEditSplitGroup} refundMap={refundsByOriginalTxId} />;
               })}
             </div>
           )}
@@ -2217,7 +2348,7 @@ const reconcile = useMemo(() => {
             <div className="space-y-2">
               {Object.entries(byMember).map(([m, d]) => {
                 const txList = filteredTxs.filter((t) => t.type !== "transfer" && (t.member || "Chưa gán thành viên") === m);
-                return <MemberReportCard key={m} member={m} data={d} txList={txList} onEditTx={setDetailTx} />;
+                return <MemberReportCard key={m} member={m} data={d} txList={txList} onEditTx={setDetailTx} refundMap={refundsByOriginalTxId} />;
               })}
             </div>
           )}
@@ -2228,7 +2359,7 @@ const reconcile = useMemo(() => {
               {Object.entries(byVendor).sort((a, b) => b[1] - a[1]).map(([ven, amt]) => {
                 const max = Math.max(...Object.values(byVendor));
                 const txList = filteredTxs.filter((t) => t.type === "expense" && t.vendor === ven);
-                return <CategoryRow key={ven} label={ven} amount={amt} max={max} color={COLORS.expense} txList={txList} onEditTx={setDetailTx} />;
+                return <CategoryRow key={ven} label={ven} amount={amt} max={max} color={COLORS.expense} txList={txList} onEditTx={setDetailTx} refundMap={refundsByOriginalTxId} />;
               })}
               {Object.keys(byVendor).length === 0 && <p className="sans text-xs" style={{ color: COLORS.textMuted }}>Không có dữ liệu NCC trong khoảng ngày đã chọn.</p>}
             </div>
@@ -2654,7 +2785,7 @@ const reconcile = useMemo(() => {
               )}
 
               {entryType === "expense" && isSplitEntry && (!editingId || editingGroupId) ? (
-                 <>
+                <>
                   <div className="flex gap-2">
                     <div className="flex-1"><label className="lbl">Tài khoản</label>
                       <select value={form.accountId} onChange={(e) => setForm({ ...form, accountId: e.target.value })}>
@@ -2663,6 +2794,18 @@ const reconcile = useMemo(() => {
                     </div>
                     <div className="flex-1"><label className="lbl">NCC (chung cả hóa đơn)</label>
                       <input value={form.vendor} onChange={(e) => setForm({ ...form, vendor: e.target.value })} placeholder="VD: Coopmart" />
+                    </div>
+                  </div>
+
+                  <div>
+                    <div className="flex items-center justify-between mb-1.5">
+                      <label className="lbl" style={{ marginBottom: 0 }}>Chọn NCC có sẵn</label>
+                      <button onClick={() => { setEntryOpen(false); setTab("caidat"); }} className="sans" style={{ fontSize: 11, color: COLORS.textMuted }}>+ Thêm mới trong Cài đặt</button>
+                    </div>
+                    <div className="chip-row flex gap-2" style={{ overflowX: "auto", paddingBottom: 2 }}>
+                      {vendors.map((v) => (
+                        <Chip key={v} label={v} active={form.vendor === v} onClick={() => setForm({ ...form, vendor: form.vendor === v ? "" : v })} />
+                      ))}
                     </div>
                   </div>
 
@@ -2742,7 +2885,7 @@ const reconcile = useMemo(() => {
                     </div>
                   </div>
 
-                  {entryType === "expense" && (
+                                    {entryType === "expense" && (
                     <div>
                       <div className="flex items-center justify-between mb-1.5">
                         <label className="lbl" style={{ marginBottom: 0 }}>Nhà cung cấp / nơi mua</label>
@@ -2756,9 +2899,78 @@ const reconcile = useMemo(() => {
                     </div>
                   )}
 
+                                    {entryType === "income" && (!editingId || isRefundEntry) && (
+                    <div>
+                      {!editingId && (
+                        <label className="sans text-xs flex items-center gap-2 mb-1.5" style={{ color: COLORS.textSecondary }}>
+                          <input
+                            type="checkbox"
+                            checked={isRefundEntry}
+                            onChange={(e) => {
+                              setIsRefundEntry(e.target.checked);
+                              if (!e.target.checked) { setRefundForTxId(null); setRefundSearchQuery(""); }
+                            }}
+                            style={{ width: "auto" }}
+                          />
+                          Đây là khoản hoàn tiền cho 1 giao dịch chi
+                        </label>
+                      )}
+                      {isRefundEntry && (
+                        selectedRefundTx ? (
+                          <div className="flex items-center justify-between rounded-md px-3 py-2" style={{ border: "1px solid " + COLORS.border, background: COLORS.surface }}>
+                            <span className="sans text-xs" style={{ color: COLORS.textSecondary }}>
+                              Hoàn cho: {fmtDate(selectedRefundTx.date)} · {selectedRefundTx.category}{selectedRefundTx.note ? " · " + selectedRefundTx.note : ""} · {fmtVND(selectedRefundTx.amount)}
+                            </span>
+                            {!editingId && (
+                              <button onClick={() => { setRefundForTxId(null); setRefundSearchQuery(""); }} className="sans text-xs" style={{ color: COLORS.textMuted, flexShrink: 0, marginLeft: 8 }}>Đổi</button>
+                            )}
+                          </div>
+                        ) : (
+                          !editingId && (
+                            <div>
+                              <input value={refundSearchQuery} onChange={(e) => setRefundSearchQuery(e.target.value)} placeholder="Tìm theo ghi chú, danh mục, NCC, số tiền..." />
+                              {refundCandidates.length > 0 && (
+                                <div className="mt-1.5 space-y-1">
+                                  {refundCandidates.map((t) => (
+                                    <div
+                                      key={t.id}
+                                      className="flex justify-between sans text-xs rounded-md px-2 py-1.5"
+                                      style={{ border: "1px solid " + COLORS.border, cursor: "pointer", color: COLORS.textSecondary }}
+                                      onClick={() => {
+                                        setRefundForTxId(t.id);
+                                        setForm({ ...form, category: t.category, member: t.member || form.member, accountId: t.accountId, amount: String(t.amount), vendor: t.vendor });
+                                        setRefundSearchQuery("");
+                                      }}
+                                    >
+                                      <span>{fmtDate(t.date)} · {t.category}{t.note ? " · " + t.note : ""}</span>
+                                      <span className="mono">{fmtVND(t.amount)}</span>
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
+                            </div>
+                          )
+                        )
+                      )}
+                      {isRefundEntry && (
+                        <div className="mt-2">
+                          <div className="flex items-center justify-between mb-1.5">
+                            <label className="lbl" style={{ marginBottom: 0 }}>Nhà cung cấp / nơi mua</label>
+                            <button onClick={() => { setEntryOpen(false); setTab("caidat"); }} className="sans" style={{ fontSize: 11, color: COLORS.textMuted }}>+ Thêm mới trong Cài đặt</button>
+                          </div>
+                          <div className="chip-row flex gap-2" style={{ overflowX: "auto", paddingBottom: 2 }}>
+                            {vendors.map((v) => (
+                              <Chip key={v} label={v} active={form.vendor === v} onClick={() => setForm({ ...form, vendor: form.vendor === v ? "" : v })} />
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
                   <div className="flex gap-2">
                     <div className="flex-1"><label className="lbl">Thành viên</label>
-                      <select value={form.member} onChange={(e) => setForm({ ...form, member: e.target.value })}>
+                    <select value={form.member} onChange={(e) => setForm({ ...form, member: e.target.value })}>
                         {members.map((m) => <option key={m} value={m}>{m}</option>)}
                       </select>
                     </div>
@@ -2812,8 +3024,17 @@ const reconcile = useMemo(() => {
                     <>
                       <div className="flex justify-between"><span style={{ color: COLORS.textMuted }}>Danh mục</span><span>{detailTx.category || "—"}</span></div>
                       <div className="flex justify-between"><span style={{ color: COLORS.textMuted }}>Tài khoản</span><span>{acc?.name}</span></div>
-                      {detailTx.vendor && <div className="flex justify-between"><span style={{ color: COLORS.textMuted }}>NCC</span><span>{detailTx.vendor}</span></div>}
+                                            {detailTx.vendor && <div className="flex justify-between"><span style={{ color: COLORS.textMuted }}>NCC</span><span>{detailTx.vendor}</span></div>}
                       {detailTx.member && <div className="flex justify-between"><span style={{ color: COLORS.textMuted }}>Thành viên</span><span>{detailTx.member}</span></div>}
+                      {detailTx.refundForTxId && (() => {
+                        const orig = txs.find((x) => x.id === detailTx.refundForTxId);
+                        return orig ? (
+                          <div className="flex justify-between sans" style={{ cursor: "pointer" }} onClick={() => setDetailTx(orig)}>
+                            <span style={{ color: COLORS.textMuted }}>Hoàn tiền cho</span>
+                            <span style={{ color: COLORS.cream, textAlign: "right", maxWidth: "60%" }}>{fmtDate(orig.date)} · {orig.category}{orig.note ? " · " + orig.note : ""}</span>
+                          </div>
+                        ) : null;
+                      })()}
                     </>
                   )}
                   {detailTx.note && <div className="flex justify-between"><span style={{ color: COLORS.textMuted }}>Ghi chú</span><span style={{ textAlign: "right", maxWidth: "60%" }}>{detailTx.note}</span></div>}
