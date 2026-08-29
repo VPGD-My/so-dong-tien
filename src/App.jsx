@@ -464,10 +464,14 @@ function MetricCard({ label, value, color }) {
   );
 }
 
-  function RefundBadge({ info }) {
+  function RefundBadge({ info, onEditTx }) {
   if (!info) return null;
+  const clickable = info.list && info.list.length === 1 && onEditTx;
   return (
-    <span style={{ background: "rgba(123,174,111,0.15)", color: COLORS.accent, fontSize: 10, padding: "1px 6px", borderRadius: 20, flexShrink: 0 }}>
+    <span
+      onClick={clickable ? (e) => { e.stopPropagation(); onEditTx(info.list[0]); } : undefined}
+      style={{ background: "rgba(123,174,111,0.15)", color: COLORS.accent, fontSize: 10, padding: "1px 6px", borderRadius: 20, flexShrink: 0, cursor: clickable ? "pointer" : "default" }}
+    >
       {info.isFull ? "Đã hoàn" : "Hoàn 1 phần"}
     </span>
   );
@@ -500,7 +504,7 @@ function RefundInline({ info, onEditTx }) {
               return (
                 <div key={t.id}>
                   <div className="flex justify-between sans text-xs" style={{ color: COLORS.textMuted, cursor: "pointer" }} onClick={(e) => { e.stopPropagation(); onEditTx && onEditTx(t); }}>
-                    <span style={{ display: "flex", alignItems: "center", gap: 6 }}>{fmtDate(t.date)} · {t.note || t.vendor || "—"} <RefundBadge info={info} /></span>
+                    <span style={{ display: "flex", alignItems: "center", gap: 6 }}>{fmtDate(t.date)} · {t.note || t.vendor || "—"} <RefundBadge info={info} onEditTx={onEditTx} /> </span>
                     <span className="mono" style={{ textDecoration: info?.isFull ? "line-through" : "none" }}>{fmtVND(t.amount)}</span>
                   </div>
                   <RefundInline info={info} onEditTx={onEditTx} />
@@ -524,7 +528,7 @@ function ReconcileItemRow({ it, onSelectTx }) {
           style={{ color: COLORS.textMuted, cursor: it.tx ? "pointer" : "default" }}
           onClick={(e) => { e.stopPropagation(); it.tx && onSelectTx && onSelectTx(it.tx); }}
         >
-          <span style={{ display: "flex", alignItems: "center", gap: 6 }}>{it.label} <RefundBadge info={it.refundInfo} /></span>
+          <span style={{ display: "flex", alignItems: "center", gap: 6 }}>{it.label} <RefundBadge info={it.refundInfo} onEditTx={onSelectTx} /></span>
           <span className="mono" style={{ color: it.sign === "-" ? COLORS.accent : COLORS.textMuted, textDecoration: it.refundInfo?.isFull ? "line-through" : "none" }}>{it.sign === "-" ? "− " : "+ "}{fmtVND(it.amount)}</span>
         </div>
         <RefundInline info={it.refundInfo} onEditTx={onSelectTx} />
@@ -546,7 +550,7 @@ function ReconcileItemRow({ it, onSelectTx }) {
                 style={{ color: COLORS.textSecondary, cursor: c.tx ? "pointer" : "default" }}
                 onClick={(e) => { e.stopPropagation(); c.tx && onSelectTx && onSelectTx(c.tx); }}
               >
-                <span style={{ display: "flex", alignItems: "center", gap: 6 }}>{c.label} <RefundBadge info={c.refundInfo} /></span>
+                <span style={{ display: "flex", alignItems: "center", gap: 6 }}>{c.label} <RefundBadge info={c.refundInfo} onEditTx={onSelectTx} /></span>
                 <span className="mono" style={{ color: COLORS.cream, textDecoration: c.refundInfo?.isFull ? "line-through" : "none" }}>{fmtVND(c.amount)}</span>
               </div>
               <RefundInline info={c.refundInfo} onEditTx={onSelectTx} />
@@ -653,7 +657,7 @@ function AccountGroupRow({ group, onEditTx, onEditGroup, refundMap }) {  const [
             return (
               <div key={t.id}>
                 <div className="flex justify-between sans text-xs" style={{ color: COLORS.textSecondary, cursor: "pointer" }} onClick={(e) => { e.stopPropagation(); onEditTx && onEditTx(t); }}>
-                  <span style={{ display: "flex", alignItems: "center", gap: 6 }}>{t.member || "Chưa gán thành viên"}{t.note ? ` · ${t.note}` : ""} <RefundBadge info={info} /></span>
+                  <span style={{ display: "flex", alignItems: "center", gap: 6 }}>{t.member || "Chưa gán thành viên"}{t.note ? ` · ${t.note}` : ""} <RefundBadge info={info} onEditTx={onEditTx} /></span>
                   <span className="mono" style={{ color: COLORS.cream, textDecoration: info?.isFull ? "line-through" : "none" }}>{fmtVND(t.amount)}</span>
                 </div>
                 <RefundInline info={info} onEditTx={onEditTx} />
@@ -684,7 +688,7 @@ function AccountReportCard({ account, data, balance, txList, onEditTx, onEditGro
             return (
               <div key={t.id}>
                 <div className="flex justify-between sans text-xs" style={{ color: COLORS.textMuted, cursor: "pointer" }} onClick={() => onEditTx && onEditTx(t)}>
-                  <span style={{ display: "flex", alignItems: "center", gap: 6 }}>{fmtDate(t.date)} · {t.category || (t.type === "transfer" ? "Chuyển khoản" : "—")}{t.note ? ` · ${t.note}` : ""} <RefundBadge info={info} /></span>
+                  <span style={{ display: "flex", alignItems: "center", gap: 6 }}>{fmtDate(t.date)}{t.type === "transfer" ? " · Chuyển khoản" : ""}{t.note ? ` · ${t.note}` : ""} <RefundBadge info={info} onEditTx={onEditTx} /></span>
                   <span className="mono" style={{ color: t.type === "income" ? COLORS.accent : t.type === "transfer" ? COLORS.transfer : COLORS.expense, flexShrink: 0, marginLeft: 8, textDecoration: info?.isFull ? "line-through" : "none" }}>
                     {t.type === "income" ? "+" : t.type === "transfer" ? "" : "-"}{fmtVND(t.amount)}
                   </span>
@@ -716,7 +720,7 @@ function MemberReportCard({ member, data, txList, onEditTx, refundMap }) {
             return (
               <div key={t.id}>
                 <div className="flex justify-between sans text-xs" style={{ color: COLORS.textMuted, cursor: "pointer" }} onClick={(e) => { e.stopPropagation(); onEditTx && onEditTx(t); }}>
-                  <span style={{ display: "flex", alignItems: "center", gap: 6 }}>{fmtDate(t.date)} · {t.category}{t.note ? ` · ${t.note}` : ""} <RefundBadge info={info} /></span>
+                  <span style={{ display: "flex", alignItems: "center", gap: 6 }}>{fmtDate(t.date)}{t.note ? ` · ${t.note}` : ""} <RefundBadge info={info} onEditTx={onEditTx} /></span>
                   <span className="mono" style={{ color: t.type === "income" ? COLORS.accent : COLORS.expense, flexShrink: 0, marginLeft: 8, textDecoration: info?.isFull ? "line-through" : "none" }}>
                     {t.type === "income" ? "+" : "-"}{fmtVND(t.amount)}
                   </span>
@@ -965,7 +969,7 @@ function SplitGroupRow({ group, onEditTx, onEditGroup, refundMap }) {
             return (
               <div key={t.id}>
                 <div className="flex justify-between sans text-xs" style={{ color: COLORS.textMuted, cursor: "pointer" }} onClick={(e) => { e.stopPropagation(); onEditTx && onEditTx(t); }}>
-                  <span style={{ display: "flex", alignItems: "center", gap: 6 }}>{t.member || "Chưa gán thành viên"}{t.note ? " · " + t.note : ""} <RefundBadge info={info} /></span>
+                  <span style={{ display: "flex", alignItems: "center", gap: 6 }}>{t.member || "Chưa gán thành viên"}{t.note ? " · " + t.note : ""} <RefundBadge info={info} onEditTx={onEditTx} /></span>
                   <span className="mono" style={{ textDecoration: info?.isFull ? "line-through" : "none" }}>{fmtVND(t.amount)}</span>
                 </div>
                 <RefundInline info={info} onEditTx={onEditTx} />
@@ -1834,14 +1838,39 @@ const reconcile = useMemo(() => {
     return g;
   }, [filteredTxs]);
 
-  const byCategory = useMemo(() => {
+  const refundTotalByOrigInPeriod = useMemo(() => {
+    const g = {};
+    filteredTxs.forEach((t) => {
+      if (t.type === "income" && t.refundForTxId) g[t.refundForTxId] = (g[t.refundForTxId] || 0) + t.amount;
+    });
+    return g;
+  }, [filteredTxs]);
+
+  const refundTotalByOrigAllTime = useMemo(() => {
+    const g = {};
+    txs.filter((t) => t.type === "income" && t.refundForTxId).forEach((t) => {
+      g[t.refundForTxId] = (g[t.refundForTxId] || 0) + t.amount;
+    });
+    return g;
+  }, [txs]);
+
+   const byCategory = useMemo(() => {
     const exp = {}, inc = {};
     filteredTxs.forEach((t) => {
-      if (t.type === "expense") exp[t.category] = (exp[t.category] || 0) + t.amount;
-      if (t.type === "income") inc[t.category] = (inc[t.category] || 0) + t.amount;
+      if (t.type === "expense") {
+        const refunded = refundTotalByOrigInPeriod[t.id] || 0;
+        exp[t.category] = (exp[t.category] || 0) + Math.max(0, t.amount - refunded);
+      }
+      if (t.type === "income") {
+        if (t.refundForTxId) {
+          inc["Hoàn tiền"] = (inc["Hoàn tiền"] || 0) + t.amount;
+        } else {
+          inc[t.category] = (inc[t.category] || 0) + t.amount;
+        }
+      }
     });
     return { exp, inc };
-  }, [filteredTxs]);
+  }, [filteredTxs, refundTotalByOrigInPeriod]);
 
       const refundsByOriginalTxId = useMemo(() => {
     const raw = {};
@@ -1884,10 +1913,11 @@ const reconcile = useMemo(() => {
   const byVendor = useMemo(() => {
     const g = {};
     filteredTxs.filter((t) => t.type === "expense" && t.vendor).forEach((t) => {
-      g[t.vendor] = (g[t.vendor] || 0) + t.amount;
+      const refunded = refundTotalByOrigInPeriod[t.id] || 0;
+      g[t.vendor] = (g[t.vendor] || 0) + Math.max(0, t.amount - refunded);
     });
     return g;
-  }, [filteredTxs]);
+  }, [filteredTxs, refundTotalByOrigInPeriod]);
 
   const pieExpense = useMemo(() => Object.entries(byCategory.exp).map(([name, value]) => ({ name, value })), [byCategory]);
   const pieIncome = useMemo(() => Object.entries(byCategory.inc).map(([name, value]) => ({ name, value })), [byCategory]);
@@ -1908,29 +1938,31 @@ const reconcile = useMemo(() => {
   }, [txs, refundSearchQuery]);
 
   const selectedRefundTx = useMemo(() => txs.find((t) => t.id === refundForTxId) || null, [txs, refundForTxId]);
-  
+
   const currentMonthExpenseByCat = useMemo(() => {
   const key = monthKey(new Date(todayISO() + "T00:00:00"));
   const g = {};
     txs.filter((t) => t.type === "expense" && monthKey(new Date(t.date + "T00:00:00")) === key).forEach((t) => {
-      g[t.category] = (g[t.category] || 0) + t.amount;
+      const refunded = refundTotalByOrigAllTime[t.id] || 0;
+      g[t.category] = (g[t.category] || 0) + Math.max(0, t.amount - refunded);
     });
     return g;
-  }, [txs]);
+  }, [txs, refundTotalByOrigAllTime]);
 
   const lastMonthExpenseByCat = useMemo(() => {
     const now = new Date(todayISO() + "T00:00:00");
     const key = monthKey(new Date(now.getFullYear(), now.getMonth() - 1, 1));
     const g = {};
     txs.filter((t) => t.type === "expense" && monthKey(new Date(t.date + "T00:00:00")) === key).forEach((t) => {
-      g[t.category] = (g[t.category] || 0) + t.amount;
+      const refunded = refundTotalByOrigAllTime[t.id] || 0;
+      g[t.category] = (g[t.category] || 0) + Math.max(0, t.amount - refunded);
     });
     return g;
-  }, [txs]);
+  }, [txs, refundTotalByOrigAllTime]);
 
   const periodTxs = useMemo(() => txs.filter((t) => t.type !== "transfer" && inPeriod(t.date, txPeriod)), [txs, txPeriod]);
-  const periodIncome = periodTxs.filter((t) => t.type === "income").reduce((s, t) => s + t.amount, 0);
-  const periodExpense = periodTxs.filter((t) => t.type === "expense").reduce((s, t) => s + t.amount, 0);
+const periodIncome = periodTxs.filter((t) => t.type === "income" && !t.refundForTxId).reduce((s, t) => s + t.amount, 0);
+const periodExpense = periodTxs.filter((t) => t.type === "expense").reduce((s, t) => s + Math.max(0, t.amount - (refundTotalByOrigAllTime[t.id] || 0)), 0);
   const recentList = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
       return txs.filter((t) => {
@@ -2175,8 +2207,10 @@ const reconcile = useMemo(() => {
                 <p className="sans text-xs mb-2" style={{ color: COLORS.textSecondary }}>Thu nhập theo danh mục (bấm để xem chi tiết)</p>
                 {Object.entries(byCategory.inc).sort((a, b) => b[1] - a[1]).map(([cat, amt]) => {
                   const max = Math.max(...Object.values(byCategory.inc));
-                  const txList = filteredTxs.filter((t) => t.type === "income" && t.category === cat);
-                 return <CategoryRow key={cat} label={cat} amount={amt} max={max} color={COLORS.expense} txList={txList} onEditTx={setDetailTx} />;
+                  const txList = cat === "Hoàn tiền"
+                    ? filteredTxs.filter((t) => t.type === "income" && t.refundForTxId)
+                    : filteredTxs.filter((t) => t.type === "income" && !t.refundForTxId && t.category === cat);
+                return <CategoryRow key={cat} label={cat} amount={amt} max={max} color={COLORS.expense} txList={txList} onEditTx={setDetailTx} />;
                 })}
               </div>
             </div>
@@ -2338,7 +2372,7 @@ const reconcile = useMemo(() => {
             <div className="space-y-2">
                 {accounts.map((a) => {
                 const d = byAccount[a.id] || { income: 0, expense: 0 };
-                const txList = groupSplitTxs(filteredTxs.filter((t) => t.accountId === a.id || t.toAccountId === a.id));
+                const txList = groupSplitTxs(filteredTxs.filter((t) => (t.accountId === a.id || t.toAccountId === a.id) && !(t.type === "income" && t.refundForTxId)));
                 return <AccountReportCard key={a.id} account={a} data={d} balance={balances[a.id] || 0} txList={txList} onEditTx={setDetailTx} onEditGroup={startEditSplitGroup} refundMap={refundsByOriginalTxId} />;
               })}
             </div>
@@ -2347,7 +2381,7 @@ const reconcile = useMemo(() => {
           {reportView === "thanhvien" && (
             <div className="space-y-2">
               {Object.entries(byMember).map(([m, d]) => {
-                const txList = filteredTxs.filter((t) => t.type !== "transfer" && (t.member || "Chưa gán thành viên") === m);
+                const txList = filteredTxs.filter((t) => t.type !== "transfer" && !(t.type === "income" && t.refundForTxId) && (t.member || "Chưa gán thành viên") === m);
                 return <MemberReportCard key={m} member={m} data={d} txList={txList} onEditTx={setDetailTx} refundMap={refundsByOriginalTxId} />;
               })}
             </div>
