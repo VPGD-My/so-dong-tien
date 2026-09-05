@@ -628,7 +628,7 @@ function RecurringItemCard({ r, acc, done, pending, txList, unitLabel, onEdit, o
     <div className="rounded-lg p-3" style={{
       background: COLORS.surface,
       border: "1px solid " + (pending ? COLORS.expense : COLORS.border),
-      opacity: inactive ? 0.55 : 1,
+      opacity: inactive ? 0.55 : (done ? 0.55 : 1),
     }}>
       <div className="flex items-center justify-between" style={{ cursor: "pointer" }} onClick={() => setOpen(!open)}>
         <div className="flex items-center gap-2">
@@ -1294,10 +1294,19 @@ useEffect(() => {
   setEntryOpen(false);
 }
 
-  async function removeTx(id) {
+    async function removeTx(id) {
+    const target = txs.find((t) => t.id === id);
     const { error } = await supabase.from("transactions").delete().eq("id", id);
     if (error) { console.error(error); return; }
     setTxs(txs.filter((t) => t.id !== id));
+    if (target?.recurringId) {
+      const r = recurring.find((x) => x.id === target.recurringId);
+      if (r && r.doneCount > 0) {
+        const newDoneCount = r.doneCount - 1;
+        const { error: rErr } = await supabase.from("recurring_items").update({ done_count: newDoneCount }).eq("id", r.id);
+        if (!rErr) setRecurring((prev) => prev.map((x) => x.id === r.id ? { ...x, doneCount: newDoneCount } : x));
+      }
+    }
     showToast("Đã xóa giao dịch");
   }
 
@@ -1568,7 +1577,7 @@ async function toggleRecurringActive(r) {
     p_date: date,
     p_amount: r.amount,
     p_category: r.category,
-    p_member: members[0] || null,
+    p_member: r.member || null,
     p_account_id: r.accountId,
     p_note: r.name + " (định kỳ)",
   });
@@ -2308,22 +2317,16 @@ const periodExpense = periodTxs.filter((t) => t.type === "expense").reduce((s, t
       {tab === "baocao" && (
         <div className="px-5 pt-5 space-y-5">
           <div className="flex gap-2 items-end" style={{ flexWrap: "nowrap" }}>
-                        <div style={{ flex: "1 1 0", minWidth: 0 }}>
+            <div style={{ flex: "1 1 0", minWidth: 0 }}>
               <label className="lbl">Từ ngày</label>
-              <div style={{ position: "relative", width: "100%" }}>
-                <input type="date" value={reportFrom} onChange={(e) => setReportFrom(e.target.value)} style={{ position: "absolute", inset: 0, width: "100%", height: "100%", opacity: 0 }} />
-                <div style={{ width: "100%", boxSizing: "border-box", background: COLORS.surface2, border: `1px solid ${COLORS.border}`, borderRadius: 8, padding: "8px 6px", fontSize: 13, color: COLORS.textPrimary, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", pointerEvents: "none" }}>
-                  {fmtDate(reportFrom)}
-                </div>
+              <div style={{ width: "100%", overflow: "hidden", borderRadius: 8, border: `1px solid ${COLORS.border}`, background: COLORS.surface2 }}>
+                <input type="date" value={reportFrom} onChange={(e) => setReportFrom(e.target.value)} style={{ width: "100%", minWidth: "100%", boxSizing: "border-box", background: "transparent", border: "none", color: COLORS.textPrimary, fontSize: 13, padding: "8px 6px" }} />
               </div>
             </div>
             <div style={{ flex: "1 1 0", minWidth: 0 }}>
               <label className="lbl">Đến ngày</label>
-              <div style={{ position: "relative", width: "100%" }}>
-                <input type="date" value={reportTo} onChange={(e) => setReportTo(e.target.value)} style={{ position: "absolute", inset: 0, width: "100%", height: "100%", opacity: 0 }} />
-                <div style={{ width: "100%", boxSizing: "border-box", background: COLORS.surface2, border: `1px solid ${COLORS.border}`, borderRadius: 8, padding: "8px 6px", fontSize: 13, color: COLORS.textPrimary, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", pointerEvents: "none" }}>
-                  {fmtDate(reportTo)}
-                </div>
+              <div style={{ width: "100%", overflow: "hidden", borderRadius: 8, border: `1px solid ${COLORS.border}`, background: COLORS.surface2 }}>
+                <input type="date" value={reportTo} onChange={(e) => setReportTo(e.target.value)} style={{ width: "100%", minWidth: "100%", boxSizing: "border-box", background: "transparent", border: "none", color: COLORS.textPrimary, fontSize: 13, padding: "8px 6px" }} />
               </div>
             </div>
             <div className="flex items-center" style={{ paddingBottom: 2, flexShrink: 0, gap: 2 }}>
