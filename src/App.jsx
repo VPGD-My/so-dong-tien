@@ -3,9 +3,9 @@ import {
   Plus, Wallet, CreditCard, Banknote, TrendingDown, TrendingUp, Trash2,
   ArrowRight, ArrowRightLeft, ArrowDownCircle, Landmark, PiggyBank, Repeat,
   Settings, Users, BarChart3, PieChart as PieChartIcon, X,Pencil,Search,
-  Flame, ShieldCheck, Minus, CalendarDays,
+    Flame, ShieldCheck, Minus, CalendarDays, ChevronLeft, ChevronRight,
 } from "lucide-react";
-import { PieChart, Pie, Cell, Tooltip, Legend, ResponsiveContainer } from "recharts";
+import { PieChart, Pie, Cell, Tooltip, Legend, ResponsiveContainer, LineChart, Line, XAxis, YAxis, CartesianGrid, LabelList } from "recharts";
 import { supabase } from "./supabaseClient";
 import Login from "./Login";
 
@@ -77,6 +77,7 @@ function recFromDb(row) {
     repeatValue: row.interval_value,
     repeatUnit: UNIT_APP_MAP[row.interval_unit] || "month",
     cycleCount: row.cycle_count || 0,
+    anchorDay: row.anchor_day ?? null,
     doneCount: row.done_count || 0,
     principal: row.principal || 0,
     isInstallment: row.is_installment || false,
@@ -94,6 +95,7 @@ function recToDb(r) {
     interval_value: r.repeatValue,
     interval_unit: UNIT_DB_MAP[r.repeatUnit] || "thang",
     cycle_count: r.cycleCount ? Number(r.cycleCount) : 0,
+    anchor_day: r.anchorDay ?? null,
     principal: r.principal ? Number(r.principal) : null,
     is_installment: r.isInstallment || false,
     is_active: r.isActive ?? true,           // ← thêm dòng này
@@ -172,6 +174,15 @@ function lastDayNextMonth() {
   return `${end.getFullYear()}-${pad(end.getMonth() + 1)}-${pad(end.getDate())}`;
 }
 
+function monthRangeFromDate(d) {
+  const first = new Date(d.getFullYear(), d.getMonth(), 1);
+  const last = new Date(d.getFullYear(), d.getMonth() + 1, 0);
+  return {
+    from: `${first.getFullYear()}-${pad(first.getMonth() + 1)}-01`,
+    to: `${last.getFullYear()}-${pad(last.getMonth() + 1)}-${pad(last.getDate())}`,
+  };
+}
+
 function getCashFlowDate(tx, account) {
   const txDate = new Date(tx.date + "T00:00:00");
   if (!account || account.type !== "credit") return txDate;
@@ -197,8 +208,7 @@ function arcPathStr(cx, cy, r, startAngle, endAngle) {
 function occurrenceDate(r, account, n) {
   if (account && account.type === "credit" && r.repeatUnit === "month") {
     const start = new Date(r.startDate + "T00:00:00");
-    const day = Math.max(1, (account.statementDay || 1) - 1);
-    // Nếu ngày phát sinh đã qua mốc (statementDay-1) của tháng đó -> kỳ đầu tiên rơi vào tháng sau
+    const day = r.anchorDay ?? Math.max(1, (account.statementDay || 1) - 1);
     const anchorMonthOffset = start.getDate() > day ? 1 : 0;
     return new Date(start.getFullYear(), start.getMonth() + anchorMonthOffset + n * r.repeatValue, day);
   }
@@ -217,12 +227,20 @@ function nextDueDate(r, account) {
 function toISODate(d) {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 }
-
-function lastStatementCutoff(account) {
-  const today = new Date();
-  const day = today.getDate();
-  if (day > account.statementDay) return new Date(today.getFullYear(), today.getMonth(), account.statementDay);
-  return new Date(today.getFullYear(), today.getMonth() - 1, account.statementDay);
+function addDaysStr(dateStr, days) {
+  const d = new Date(dateStr + "T00:00:00");
+  d.setDate(d.getDate() + days);
+  return toISODate(d);
+}
+function lastStatementCutoff(account, refDate) {
+  const ref = refDate || new Date();
+  const day = ref.getDate();
+  if (day >= account.statementDay) return new Date(ref.getFullYear(), ref.getMonth(), account.statementDay);
+  return new Date(ref.getFullYear(), ref.getMonth() - 1, account.statementDay);
+}
+function cutoffForSelectedMonth(account, monthAnchorStr) {
+  const d = new Date(monthAnchorStr + "T00:00:00");
+  return new Date(d.getFullYear(), d.getMonth(), account.statementDay);
 }
 
 function dueDateForCutoff(cutoff, account) {
@@ -1010,6 +1028,15 @@ export default function App() {
   const [entryType, setEntryType] = useState("expense");
   const [txPeriod, setTxPeriod] = useState("month");
   const [reportView, setReportView] = useState("danhmuc");
+  const [trendFilters, setTrendFilters] = useState({ category: [], vendor: [], account: [], member: [] });
+
+  function toggleTrendFilter(group, value) {
+  setTrendFilters((f) => {
+    const cur = f[group];
+    const next = cur.includes(value) ? cur.filter((v) => v !== value) : [...cur, value];
+    return { ...f, [group]: next };
+  });
+  }
   const [reconcileAccId, setReconcileAccId] = useState("");
   const [selectedExpenseCat, setSelectedExpenseCat] = useState(null);
   const [selectedIncomeCat, setSelectedIncomeCat] = useState(null);
@@ -1017,6 +1044,13 @@ export default function App() {
   const [reportFrom, setReportFrom] = useState(firstDayThisMonth());
   const [reportTo, setReportTo] = useState(lastDayNextMonth());
 
+  function shiftReportMonth(delta) {
+    const base = new Date(reportFrom + "T00:00:00");
+    const target = new Date(base.getFullYear(), base.getMonth() + delta, 1);
+    const { from, to } = monthRangeFromDate(target);
+    setReportFrom(from);
+    setReportTo(to);
+  }
     const accById = (id) => accounts.find((a) => a.id === id);
 
   function groupSplitTxs(list) {
@@ -1219,8 +1253,9 @@ useEffect(() => {
   if (entryType === "transfer") {
     if (form.fromAccountId === form.toAccountId) return;
     payload = txToDb({ type: "transfer", date: form.date, amount: Number(form.amount), accountId: form.fromAccountId, toAccountId: form.toAccountId, note: form.note });
-  } else {
-    payload = txToDb({ type: entryType, date: form.date, amount: Number(form.amount), category: form.category, member: form.member, accountId: form.accountId, vendor: form.vendor, note: form.note, refundForTxId: entryType === "income" ? refundForTxId : null });
+    } else {
+    const original = editingId ? txs.find((t) => t.id === editingId) : null;
+    payload = txToDb({ type: entryType, date: form.date, amount: Number(form.amount), category: form.category, member: form.member, accountId: form.accountId, vendor: form.vendor, note: form.note, refundForTxId: entryType === "income" ? refundForTxId : null, recurringId: original?.recurringId || null, splitGroupId: original?.splitGroupId || null });
   }
   if (editingId) {
     const { data, error } = await supabase.from("transactions").update(payload).eq("id", editingId).select().single();
@@ -1455,6 +1490,10 @@ if (editingRecurringId) {
   setRecurring(recurring.map((r) => r.id === editingRecurringId ? recFromDb(data) : r));
   showToast("Đã cập nhật khoản định kỳ");
 } else {
+  const selectedAcc = accounts.find((a) => a.id === payload.account_id);
+    if (selectedAcc?.type === "credit" && payload.repeat_unit === "month") {
+      payload.anchor_day = Math.max(1, (selectedAcc.statementDay || 1) - 1);
+    }
   const { data, error } = await supabase.from("recurring_items").insert(payload).select().single();
   if (error) { console.error(error); return; }
   setRecurring([...recurring, recFromDb(data)]);
@@ -1671,7 +1710,7 @@ const reconcile = useMemo(() => {
     const acc = accounts.find((a) => a.id === reconcileAccId) || creditAccounts[0];
     if (!acc) return null;
 
-    const cutoff = lastStatementCutoff(acc);
+        const cutoff = cutoffForSelectedMonth(acc, reportFrom);
     const cutoffStr = toISODate(cutoff);
     const dueDate = dueDateForCutoff(cutoff, acc);
     const dueStr = toISODate(dueDate);
@@ -1682,7 +1721,7 @@ const reconcile = useMemo(() => {
     const balanceAsOf = (dateStr) => {
       let bal = acc.openingBalance || 0;
       txs.forEach((t) => {
-        if (t.date >= dateStr) return;
+        if (t.date > dateStr) return;
         if (t.accountId === acc.id) {
           if (t.type === "income") bal += t.amount;
           if (t.type === "expense") bal -= t.amount;
@@ -1749,17 +1788,16 @@ const reconcile = useMemo(() => {
 
     const closingBalance = Math.max(0, -balanceAsOf(cutoffStr));
     
-    const cycleTxs = txsInRange(prevCutoffStr, cutoffStr);
+    const cycleTxs = txsInRange(addDaysStr(prevCutoffStr, 1), addDaysStr(cutoffStr, 1));
 
-    const paymentsAfterClosingTxs = txsInRange(cutoffStr, toISODate(new Date(dueDate.getFullYear(), dueDate.getMonth(), dueDate.getDate() + 1))).filter((t) =>
+    const paymentsAfterClosingTxs = txsInRange(addDaysStr(cutoffStr, 1), toISODate(new Date(dueDate.getFullYear(), dueDate.getMonth(), dueDate.getDate() + 1))).filter((t) =>
     (t.accountId === acc.id && t.type === "income") || (t.toAccountId === acc.id && t.type === "transfer")
     );
     const paymentsAfterClosing = paymentsAfterClosingTxs.reduce((s, t) => s + t.amount, 0);
     const tbgdRemaining = Math.max(0, closingBalance - paymentsAfterClosing);
 
     const currentBalance = Math.max(0, -(balances[acc.id] || 0));
-    const currentTxs = txsInRange(prevCutoffStr, toISODate(new Date(new Date(todayStr).getFullYear(), new Date(todayStr).getMonth(), new Date(todayStr).getDate() + 1)));
-
+        const currentTxs = txsInRange(addDaysStr(prevCutoffStr, 1), toISODate(new Date(new Date(todayStr).getFullYear(), new Date(todayStr).getMonth(), new Date(todayStr).getDate() + 1)));
     const installmentBalance = installmentReserved[acc.id] || 0;
     const installmentItems = recurring
       .filter((r) => r.isInstallment && r.accountId === acc.id && r.principal)
@@ -1782,7 +1820,7 @@ const reconcile = useMemo(() => {
       available,
       duePayment: closingBalance,
     };
-  }, [reconcileAccId, accounts, txs, balances, installmentReserved, recurring]);
+    }, [reconcileAccId, accounts, txs, balances, installmentReserved, recurring, reportFrom, reportTo]);
 
   const netWorth = useMemo(() => accounts.filter((a) => a.includeNetWorth).reduce((s, a) => s + (balances[a.id] || 0), 0), [accounts, balances]);
   const liabilities = useMemo(() => accounts.filter((a) => a.type === "credit" || a.type === "payable").reduce((s, a) => s + Math.max(0, -(balances[a.id] || 0)), 0), [accounts, balances]);
@@ -1853,6 +1891,77 @@ const reconcile = useMemo(() => {
     });
     return g;
   }, [txs]);
+
+    const last12Months = useMemo(() => {
+    const arr = [];
+    const now = new Date(todayISO() + "T00:00:00");
+    for (let i = 11; i >= 0; i--) {
+      const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+      arr.push({ key: monthKey(d), label: `T${d.getMonth() + 1}/${String(d.getFullYear()).slice(2)}` });
+    }
+    return arr;
+  }, []);
+
+  const trendTxs = useMemo(() => {
+    const keys = new Set(last12Months.map((m) => m.key));
+    const inRange = txs.filter((t) => keys.has(monthKey(new Date(t.date + "T00:00:00"))));
+    const expanded = [];
+    inRange.forEach((t) => {
+      if (t.type === "transfer") {
+        expanded.push({ ...t, _transferLeg: "out", _effAccountId: t.accountId });
+        expanded.push({ ...t, _transferLeg: "in", _effAccountId: t.toAccountId });
+      } else {
+        expanded.push({ ...t, _effAccountId: t.accountId });
+      }
+    });
+    return expanded;
+  }, [txs, last12Months]);
+
+  const trendFilterOptions = useMemo(() => {
+    const cat = new Set(), ven = new Set(), mem = new Set();
+    trendTxs.forEach((t) => {
+      if (t.category) cat.add(t.category);
+      if (t.vendor) ven.add(t.vendor);
+      if (t.member) mem.add(t.member);
+    });
+    return {
+      category: Array.from(cat).sort(),
+      vendor: Array.from(ven).sort(),
+      account: accounts.map((a) => a.name),
+      member: Array.from(mem).sort(),
+    };
+  }, [trendTxs, accounts]);
+
+    const trendFilteredTxs = useMemo(() => {
+    return trendTxs.filter((t) => {
+      if (trendFilters.category.length && !trendFilters.category.includes(t.category)) return false;
+      if (trendFilters.vendor.length && !trendFilters.vendor.includes(t.vendor)) return false;
+      if (trendFilters.account.length) {
+        const accName = accById(t._effAccountId)?.name;
+        if (!trendFilters.account.includes(accName)) return false;
+      }
+      if (trendFilters.member.length && !trendFilters.member.includes(t.member)) return false;
+      return true;
+    });
+  }, [trendTxs, trendFilters]);
+
+  const trendMonthlyData = useMemo(() => {
+    const incByMonth = {}, expByMonth = {};
+    last12Months.forEach((m) => { incByMonth[m.key] = 0; expByMonth[m.key] = 0; });
+    trendFilteredTxs.forEach((t) => {
+      const key = monthKey(new Date(t.date + "T00:00:00"));
+      if (t.type === "income" && !t.refundForTxId) incByMonth[key] += t.amount;
+      if (t.type === "expense") {
+        const refunded = refundTotalByOrigAllTime[t.id] || 0;
+        expByMonth[key] += Math.max(0, t.amount - refunded);
+      }
+      if (t.type === "transfer") {
+        if (t._transferLeg === "out") expByMonth[key] += t.amount;
+        if (t._transferLeg === "in") incByMonth[key] += t.amount;
+      }
+    });
+    return last12Months.map((m) => ({ month: m.label, thu: incByMonth[m.key], chi: expByMonth[m.key] }));
+  }, [trendFilteredTxs, last12Months, refundTotalByOrigAllTime]);
 
    const byCategory = useMemo(() => {
     const exp = {}, inc = {};
@@ -1963,6 +2072,15 @@ const reconcile = useMemo(() => {
   const periodTxs = useMemo(() => txs.filter((t) => t.type !== "transfer" && inPeriod(t.date, txPeriod)), [txs, txPeriod]);
 const periodIncome = periodTxs.filter((t) => t.type === "income" && !t.refundForTxId).reduce((s, t) => s + t.amount, 0);
 const periodExpense = periodTxs.filter((t) => t.type === "expense").reduce((s, t) => s + Math.max(0, t.amount - (refundTotalByOrigAllTime[t.id] || 0)), 0);
+  
+  const groupTotalsBySplitId = useMemo(() => {
+    const g = {};
+    txs.forEach((t) => {
+      if (t.splitGroupId) g[t.splitGroupId] = (g[t.splitGroupId] || 0) + t.amount;
+    });
+    return g;
+  }, [txs]);
+
   const recentList = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
       return txs.filter((t) => {
@@ -1970,11 +2088,12 @@ const periodExpense = periodTxs.filter((t) => t.type === "expense").reduce((s, t
         if (!q) return true;
         const qDigits = q.replace(/[^\d]/g, "");
         const amountStr = String(t.amount || "");
-        const matchAmount = qDigits && amountStr.includes(qDigits);
+        const groupAmountStr = t.splitGroupId ? String(groupTotalsBySplitId[t.splitGroupId] || "") : "";
+        const matchAmount = qDigits && (amountStr.includes(qDigits) || groupAmountStr.includes(qDigits));
         const matchText = [t.note, t.category, t.vendor, t.member].some((f) => (f || "").toLowerCase().includes(q));
         return matchText || matchAmount;
       });
-    }, [txs, txPeriod, searchQuery]);
+    }, [txs, txPeriod, searchQuery, groupTotalsBySplitId]);
 
     const recentListByDate = useMemo(() => {
     const groups = [];
@@ -2166,9 +2285,20 @@ const periodExpense = periodTxs.filter((t) => t.type === "expense").reduce((s, t
       {/* BAO CAO */}
       {tab === "baocao" && (
         <div className="px-5 pt-5 space-y-5">
-          <div className="flex gap-2">
+          <div className="flex gap-2 items-end">
             <div className="flex-1"><label className="lbl">Từ ngày</label><input type="date" value={reportFrom} onChange={(e) => setReportFrom(e.target.value)} /></div>
             <div className="flex-1"><label className="lbl">Đến ngày</label><input type="date" value={reportTo} onChange={(e) => setReportTo(e.target.value)} /></div>
+            <div className="flex items-center gap-1" style={{ paddingBottom: 2 }}>
+              <button onClick={() => shiftReportMonth(-1)} className="flex items-center justify-center" style={{ width: 32, height: 32, borderRadius: 8, border: `1px solid ${COLORS.border}`, color: COLORS.textSecondary }}>
+                <ChevronLeft size={16} />
+              </button>
+              <span className="mono text-xs" style={{ color: COLORS.textPrimary, minWidth: 56, textAlign: "center" }}>
+                {pad(new Date(reportFrom + "T00:00:00").getMonth() + 1)}/{new Date(reportFrom + "T00:00:00").getFullYear()}
+              </span>
+              <button onClick={() => shiftReportMonth(1)} className="flex items-center justify-center" style={{ width: 32, height: 32, borderRadius: 8, border: `1px solid ${COLORS.border}`, color: COLORS.textSecondary }}>
+                <ChevronRight size={16} />
+              </button>
+            </div>
           </div>
 
         <div className="flex gap-2">
@@ -2189,6 +2319,7 @@ const periodExpense = periodTxs.filter((t) => t.type === "expense").reduce((s, t
             { v: "thanhvien", l: "Theo thành viên" },
             { v: "tonghop", l: "Tổng hợp tháng" },
             { v: "doichieu", l: "Đối chiếu sao kê" },
+            { v: "xuhuong", l: "Xu hướng" },
           ].map((o) => <Chip key={o.v} label={o.l} active={reportView === o.v} onClick={() => setReportView(o.v)} />)}
         </div>
         
@@ -2407,6 +2538,45 @@ const periodExpense = periodTxs.filter((t) => t.type === "expense").reduce((s, t
               })}
             </div>
           )}
+
+{reportView === "xuhuong" && (
+  <div className="space-y-4">
+        {[
+      { key: "category", label: "Danh mục" },
+      { key: "vendor", label: "NCC" },
+      { key: "account", label: "Tài khoản" },
+      { key: "member", label: "Thành viên" },
+    ].map((g) => (
+      <div key={g.key}>
+        <p className="sans text-xs mb-2" style={{ color: COLORS.textSecondary }}>{g.label}</p>
+        <div className="flex flex-wrap gap-2">
+          <Chip label="Tất cả" active={trendFilters[g.key].length === 0} onClick={() => setTrendFilters((f) => ({ ...f, [g.key]: [] }))} />
+          {trendFilterOptions[g.key].map((opt) => (
+            <Chip key={opt} label={opt} active={trendFilters[g.key].includes(opt)} onClick={() => toggleTrendFilter(g.key, opt)} />
+          ))}
+        </div>
+      </div>
+    ))}
+
+    <div style={{ width: "100%", height: 280 }}>
+      <ResponsiveContainer>
+                <LineChart data={trendMonthlyData} margin={{ top: 24, right: 24, left: 0, bottom: 24 }}>
+          <CartesianGrid stroke={COLORS.border} strokeDasharray="3 3" vertical={false} />
+          <XAxis dataKey="month" tick={{ fill: COLORS.textSecondary, fontSize: 11 }} />
+          <YAxis tick={{ fill: COLORS.textSecondary, fontSize: 11 }} tickFormatter={(v) => `${(v / 1000000).toFixed(0)}tr`} />
+          <Tooltip formatter={(v) => fmtVND(v)} contentStyle={{ background: COLORS.surface, border: `1px solid ${COLORS.border}` }} labelStyle={{ color: COLORS.textPrimary }} />
+          <Legend wrapperStyle={{ fontSize: 12 }} />
+          <Line type="monotone" dataKey="thu" name="Thu" stroke={COLORS.accent} strokeWidth={2} dot={{ r: 3 }}>
+            <LabelList dataKey="thu" position="top" formatter={(v) => (v > 0 ? `${(v / 1000000).toFixed(1)}` : "")} style={{ fill: COLORS.accent, fontSize: 9 }} />
+          </Line>
+          <Line type="monotone" dataKey="chi" name="Chi" stroke={COLORS.expense} strokeWidth={2} dot={{ r: 3 }}>
+            <LabelList dataKey="chi" position="bottom" formatter={(v) => (v > 0 ? `${(v / 1000000).toFixed(1)}` : "")} style={{ fill: COLORS.expense, fontSize: 9 }} />
+          </Line>
+        </LineChart>
+      </ResponsiveContainer>
+    </div>
+  </div>
+)}
 
           {reportView === "doichieu" && (
             <div className="space-y-4">
