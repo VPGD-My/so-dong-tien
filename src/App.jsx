@@ -2307,18 +2307,34 @@ const periodExpense = periodTxs.filter((t) => t.type === "expense").reduce((s, t
       {/* BAO CAO */}
       {tab === "baocao" && (
         <div className="px-5 pt-5 space-y-5">
-          <div className="flex gap-2 items-end">
-            <div className="flex-1"><label className="lbl">Từ ngày</label><input type="date" value={reportFrom} onChange={(e) => setReportFrom(e.target.value)} /></div>
-            <div className="flex-1"><label className="lbl">Đến ngày</label><input type="date" value={reportTo} onChange={(e) => setReportTo(e.target.value)} /></div>
-            <div className="flex items-center gap-1" style={{ paddingBottom: 2 }}>
-              <button onClick={() => shiftReportMonth(-1)} className="flex items-center justify-center" style={{ width: 32, height: 32, borderRadius: 8, border: `1px solid ${COLORS.border}`, color: COLORS.textSecondary }}>
-                <ChevronLeft size={16} />
+          <div className="flex gap-2 items-end" style={{ flexWrap: "nowrap" }}>
+                        <div style={{ flex: "1 1 0", minWidth: 0 }}>
+              <label className="lbl">Từ ngày</label>
+              <div style={{ position: "relative", width: "100%" }}>
+                <input type="date" value={reportFrom} onChange={(e) => setReportFrom(e.target.value)} style={{ position: "absolute", inset: 0, width: "100%", height: "100%", opacity: 0 }} />
+                <div style={{ width: "100%", boxSizing: "border-box", background: COLORS.surface2, border: `1px solid ${COLORS.border}`, borderRadius: 8, padding: "8px 6px", fontSize: 13, color: COLORS.textPrimary, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", pointerEvents: "none" }}>
+                  {fmtDate(reportFrom)}
+                </div>
+              </div>
+            </div>
+            <div style={{ flex: "1 1 0", minWidth: 0 }}>
+              <label className="lbl">Đến ngày</label>
+              <div style={{ position: "relative", width: "100%" }}>
+                <input type="date" value={reportTo} onChange={(e) => setReportTo(e.target.value)} style={{ position: "absolute", inset: 0, width: "100%", height: "100%", opacity: 0 }} />
+                <div style={{ width: "100%", boxSizing: "border-box", background: COLORS.surface2, border: `1px solid ${COLORS.border}`, borderRadius: 8, padding: "8px 6px", fontSize: 13, color: COLORS.textPrimary, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", pointerEvents: "none" }}>
+                  {fmtDate(reportTo)}
+                </div>
+              </div>
+            </div>
+            <div className="flex items-center" style={{ paddingBottom: 2, flexShrink: 0, gap: 2 }}>
+              <button onClick={() => shiftReportMonth(-1)} className="flex items-center justify-center" style={{ width: 26, height: 26, borderRadius: 8, border: `1px solid ${COLORS.border}`, color: COLORS.textSecondary, flexShrink: 0 }}>
+                <ChevronLeft size={14} />
               </button>
-              <span className="mono text-xs" style={{ color: COLORS.textPrimary, minWidth: 56, textAlign: "center" }}>
+              <span className="mono text-xs" style={{ color: COLORS.textPrimary, minWidth: 44, textAlign: "center", flexShrink: 0 }}>
                 {pad(new Date(reportFrom + "T00:00:00").getMonth() + 1)}/{new Date(reportFrom + "T00:00:00").getFullYear()}
               </span>
-              <button onClick={() => shiftReportMonth(1)} className="flex items-center justify-center" style={{ width: 32, height: 32, borderRadius: 8, border: `1px solid ${COLORS.border}`, color: COLORS.textSecondary }}>
-                <ChevronRight size={16} />
+              <button onClick={() => shiftReportMonth(1)} className="flex items-center justify-center" style={{ width: 26, height: 26, borderRadius: 8, border: `1px solid ${COLORS.border}`, color: COLORS.textSecondary, flexShrink: 0 }}>
+                <ChevronRight size={14} />
               </button>
             </div>
           </div>
@@ -2593,10 +2609,10 @@ const periodExpense = periodTxs.filter((t) => t.type === "expense").reduce((s, t
           <Tooltip formatter={(v) => fmtVND(v)} contentStyle={{ background: COLORS.surface, border: `1px solid ${COLORS.border}` }} labelStyle={{ color: COLORS.textPrimary }} />
           <Legend wrapperStyle={{ fontSize: 13 }} />
           <Line type="monotone" dataKey="thu" name="Thu" stroke={COLORS.accent} strokeWidth={2} dot={{ r: 4 }}>
-            <LabelList dataKey="thu" position="top" formatter={(v) => (v > 0 ? `${(v / 1000000).toFixed(1)}tr` : "")} style={{ fill: COLORS.accent, fontSize: 12 }} />
+            <LabelList dataKey="thu" position="top" formatter={(v) => (v > 0 ? `${(v / 1000000).toFixed(1)}` : "")} style={{ fill: COLORS.accent, fontSize: 12 }} />
           </Line>
           <Line type="monotone" dataKey="chi" name="Chi" stroke={COLORS.expense} strokeWidth={2} dot={{ r: 4 }}>
-            <LabelList dataKey="chi" position="bottom" formatter={(v) => (v > 0 ? `${(v / 1000000).toFixed(1)}tr` : "")} style={{ fill: COLORS.expense, fontSize: 12 }} />
+            <LabelList dataKey="chi" position="bottom" formatter={(v) => (v > 0 ? `${(v / 1000000).toFixed(1)}` : "")} style={{ fill: COLORS.expense, fontSize: 12 }} />
           </Line>
         </LineChart>
       </ResponsiveContainer>
