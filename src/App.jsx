@@ -453,6 +453,26 @@ function Chip({ label, active, onClick, onRemove }) {
   );
 }
 
+function HScrollChipRow({ children }) {
+  const scrollRef = useRef(null);
+  function scrollByAmount(delta) {
+    scrollRef.current?.scrollBy({ left: delta, behavior: "smooth" });
+  }
+  return (
+    <div className="flex items-center gap-1">
+      <button onClick={() => scrollByAmount(-120)} style={{ flexShrink: 0, width: 22, height: 22, display: "flex", alignItems: "center", justifyContent: "center", color: COLORS.textMuted }}>
+        <ChevronLeft size={14} />
+      </button>
+      <div ref={scrollRef} className="flex gap-2 hide-scrollbar" style={{ overflowX: "auto", flexWrap: "nowrap" }}>
+        {children}
+      </div>
+      <button onClick={() => scrollByAmount(120)} style={{ flexShrink: 0, width: 22, height: 22, display: "flex", alignItems: "center", justifyContent: "center", color: COLORS.textMuted }}>
+        <ChevronRight size={14} />
+      </button>
+    </div>
+  );
+}
+
 function Section({ title, children, right, id, accent }) {
   return (
     <div className="pt-2" id={id}>
@@ -1892,18 +1912,18 @@ const reconcile = useMemo(() => {
     return g;
   }, [txs]);
 
-    const last12Months = useMemo(() => {
+    const trendMonths = useMemo(() => {
     const arr = [];
-    const now = new Date(todayISO() + "T00:00:00");
-    for (let i = 11; i >= 0; i--) {
-      const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+    const anchor = new Date(reportFrom + "T00:00:00");
+    for (let i = 5; i >= 0; i--) {
+      const d = new Date(anchor.getFullYear(), anchor.getMonth() - i, 1);
       arr.push({ key: monthKey(d), label: `T${d.getMonth() + 1}/${String(d.getFullYear()).slice(2)}` });
     }
     return arr;
-  }, []);
+  }, [reportFrom]);
 
   const trendTxs = useMemo(() => {
-    const keys = new Set(last12Months.map((m) => m.key));
+    const keys = new Set(trendMonths.map((m) => m.key));
     const inRange = txs.filter((t) => keys.has(monthKey(new Date(t.date + "T00:00:00"))));
     const expanded = [];
     inRange.forEach((t) => {
@@ -1915,7 +1935,7 @@ const reconcile = useMemo(() => {
       }
     });
     return expanded;
-  }, [txs, last12Months]);
+  }, [txs, trendMonths]);
 
   const trendFilterOptions = useMemo(() => {
     const cat = new Set(), ven = new Set(), mem = new Set();
@@ -1947,7 +1967,7 @@ const reconcile = useMemo(() => {
 
   const trendMonthlyData = useMemo(() => {
     const incByMonth = {}, expByMonth = {};
-    last12Months.forEach((m) => { incByMonth[m.key] = 0; expByMonth[m.key] = 0; });
+    trendMonths.forEach((m) => { incByMonth[m.key] = 0; expByMonth[m.key] = 0; });
     trendFilteredTxs.forEach((t) => {
       const key = monthKey(new Date(t.date + "T00:00:00"));
       if (t.type === "income" && !t.refundForTxId) incByMonth[key] += t.amount;
@@ -1960,8 +1980,8 @@ const reconcile = useMemo(() => {
         if (t._transferLeg === "in") incByMonth[key] += t.amount;
       }
     });
-    return last12Months.map((m) => ({ month: m.label, thu: incByMonth[m.key], chi: expByMonth[m.key] }));
-  }, [trendFilteredTxs, last12Months, refundTotalByOrigAllTime]);
+      return trendMonths.map((m) => ({ month: m.label, thu: incByMonth[m.key], chi: expByMonth[m.key] }));
+  }, [trendFilteredTxs, trendMonths, refundTotalByOrigAllTime]);
 
    const byCategory = useMemo(() => {
     const exp = {}, inc = {};
@@ -2129,6 +2149,8 @@ const periodExpense = periodTxs.filter((t) => t.type === "expense").reduce((s, t
   }, [recentList, accounts]);
 
   const inputStyle = `
+    .hide-scrollbar { scrollbar-width: none; -ms-overflow-style: none; }
+    .hide-scrollbar::-webkit-scrollbar { display: none; }
   * { box-sizing: border-box; }
   html, body { overflow-x: clip; max-width: 100vw; }
   html { font-size: 18.4px; }
@@ -2549,28 +2571,32 @@ const periodExpense = periodTxs.filter((t) => t.type === "expense").reduce((s, t
     ].map((g) => (
       <div key={g.key}>
         <p className="sans text-xs mb-2" style={{ color: COLORS.textSecondary }}>{g.label}</p>
-        <div className="flex flex-wrap gap-2">
-          <Chip label="Tất cả" active={trendFilters[g.key].length === 0} onClick={() => setTrendFilters((f) => ({ ...f, [g.key]: [] }))} />
+        <HScrollChipRow>
+          <div style={{ flexShrink: 0 }}>
+            <Chip label="Tất cả" active={trendFilters[g.key].length === 0} onClick={() => setTrendFilters((f) => ({ ...f, [g.key]: [] }))} />
+          </div>
           {trendFilterOptions[g.key].map((opt) => (
-            <Chip key={opt} label={opt} active={trendFilters[g.key].includes(opt)} onClick={() => toggleTrendFilter(g.key, opt)} />
+            <div key={opt} style={{ flexShrink: 0 }}>
+              <Chip label={opt} active={trendFilters[g.key].includes(opt)} onClick={() => toggleTrendFilter(g.key, opt)} />
+            </div>
           ))}
-        </div>
+        </HScrollChipRow>
       </div>
     ))}
 
-    <div style={{ width: "100%", height: 280 }}>
+    <div style={{ width: "100%", height: 340 }}>
       <ResponsiveContainer>
-                <LineChart data={trendMonthlyData} margin={{ top: 24, right: 24, left: 0, bottom: 24 }}>
+        <LineChart data={trendMonthlyData} margin={{ top: 28, right: 12, left: 0, bottom: 28 }}>
           <CartesianGrid stroke={COLORS.border} strokeDasharray="3 3" vertical={false} />
-          <XAxis dataKey="month" tick={{ fill: COLORS.textSecondary, fontSize: 11 }} />
-          <YAxis tick={{ fill: COLORS.textSecondary, fontSize: 11 }} tickFormatter={(v) => `${(v / 1000000).toFixed(0)}tr`} />
+          <XAxis dataKey="month" tick={{ fill: COLORS.textSecondary, fontSize: 13 }} />
+          <YAxis tick={{ fill: COLORS.textSecondary, fontSize: 12 }} tickFormatter={(v) => `${(v / 1000000).toFixed(0)}tr`} width={40} />
           <Tooltip formatter={(v) => fmtVND(v)} contentStyle={{ background: COLORS.surface, border: `1px solid ${COLORS.border}` }} labelStyle={{ color: COLORS.textPrimary }} />
-          <Legend wrapperStyle={{ fontSize: 12 }} />
-          <Line type="monotone" dataKey="thu" name="Thu" stroke={COLORS.accent} strokeWidth={2} dot={{ r: 3 }}>
-            <LabelList dataKey="thu" position="top" formatter={(v) => (v > 0 ? `${(v / 1000000).toFixed(1)}` : "")} style={{ fill: COLORS.accent, fontSize: 9 }} />
+          <Legend wrapperStyle={{ fontSize: 13 }} />
+          <Line type="monotone" dataKey="thu" name="Thu" stroke={COLORS.accent} strokeWidth={2} dot={{ r: 4 }}>
+            <LabelList dataKey="thu" position="top" formatter={(v) => (v > 0 ? `${(v / 1000000).toFixed(1)}tr` : "")} style={{ fill: COLORS.accent, fontSize: 12 }} />
           </Line>
-          <Line type="monotone" dataKey="chi" name="Chi" stroke={COLORS.expense} strokeWidth={2} dot={{ r: 3 }}>
-            <LabelList dataKey="chi" position="bottom" formatter={(v) => (v > 0 ? `${(v / 1000000).toFixed(1)}` : "")} style={{ fill: COLORS.expense, fontSize: 9 }} />
+          <Line type="monotone" dataKey="chi" name="Chi" stroke={COLORS.expense} strokeWidth={2} dot={{ r: 4 }}>
+            <LabelList dataKey="chi" position="bottom" formatter={(v) => (v > 0 ? `${(v / 1000000).toFixed(1)}tr` : "")} style={{ fill: COLORS.expense, fontSize: 12 }} />
           </Line>
         </LineChart>
       </ResponsiveContainer>
@@ -2953,8 +2979,7 @@ const periodExpense = periodTxs.filter((t) => t.type === "expense").reduce((s, t
 
         {entryOpen && (
           <div onClick={() => setEntryOpen(false)} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.6)", zIndex: 45, display: "flex", alignItems: "flex-end", justifyContent: "center" }}>
-            <div onClick={(e) => e.stopPropagation()} className="rounded-t-2xl p-4 w-full space-y-3" style={{ maxWidth: 480, background: COLORS.surface, border: "1px solid " + COLORS.border, maxHeight: "88vh", overflowY: "auto" }}>
-              
+             <div onClick={(e) => e.stopPropagation()} className="rounded-t-2xl p-4 w-full space-y-3 hide-scrollbar" style={{ maxWidth: 480, background: COLORS.surface, border: "1px solid " + COLORS.border, maxHeight: "88vh", overflowY: "auto" }}>
               <div className="flex items-center justify-between">
                 <p className="sans text-sm" style={{ color: COLORS.textSecondary }}>{editingId ? "Sửa giao dịch" : "Thêm giao dịch"}</p>
                 <button onClick={() => setEntryOpen(false)} style={{ color: COLORS.textMuted }}><X size={18} /></button>
@@ -3213,7 +3238,7 @@ const periodExpense = periodTxs.filter((t) => t.type === "expense").reduce((s, t
           const sign = detailTx.type === "income" ? "+" : detailTx.type === "transfer" ? "" : "-";
           return (
             <div onClick={() => setDetailTx(null)} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.6)", zIndex: 40, display: "flex", alignItems: "flex-end", justifyContent: "center" }}>
-              <div onClick={(e) => e.stopPropagation()} className="rounded-t-2xl p-4 w-full space-y-3" style={{ maxWidth: 480, background: COLORS.surface, border: "1px solid " + COLORS.border, maxHeight: "88vh", overflowY: "auto" }}>
+              <div onClick={(e) => e.stopPropagation()} className="rounded-t-2xl p-4 w-full space-y-3 hide-scrollbar" style={{ maxWidth: 480, background: COLORS.surface, border: "1px solid " + COLORS.border, maxHeight: "88vh", overflowY: "auto" }}>
                 <div className="flex items-center justify-between mb-4">
                   <p className="sans text-sm" style={{ color: COLORS.textSecondary }}>Chi tiết giao dịch</p>
                   <button onClick={() => setDetailTx(null)} style={{ color: COLORS.textMuted }}><X size={18} /></button>
