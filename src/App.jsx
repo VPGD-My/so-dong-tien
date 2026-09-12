@@ -4,10 +4,14 @@ import {
   ArrowRight, ArrowRightLeft, ArrowDownCircle, Landmark, PiggyBank, Repeat,
   Settings, Users, BarChart3, PieChart as PieChartIcon, X,Pencil,Search,
     Flame, ShieldCheck, Minus, CalendarDays, ChevronLeft, ChevronRight,
+  Upload, FileText, Check,
 } from "lucide-react";
 import { PieChart, Pie, Cell, Tooltip, Legend, ResponsiveContainer, LineChart, Line, XAxis, YAxis, CartesianGrid, LabelList } from "recharts";
 import { supabase } from "./supabaseClient";
 import Login from "./Login";
+import * as pdfjsLib from "pdfjs-dist";
+import pdfjsWorkerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
+pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorkerUrl;
 
 function accFromDb(row) {
   return {
@@ -232,6 +236,100 @@ function addDaysStr(dateStr, days) {
   d.setDate(d.getDate() + days);
   return toISODate(d);
 }
+
+// ===== Đối chiếu sao kê PDF (Sacombank / HSBC) =====
+async function extractPdfLines(file, password) {
+  const buf = await file.arrayBuffer();
+  const pdf = await pdfjsLib.getDocument(password ? { data: buf, password } : { data: buf }).promise;const lines = [];
+  for (let p = 1; p <= pdf.numPages; p++) {
+    const page = await pdf.getPage(p);
+    const content = await page.getTextContent();
+    const rows = {};
+    content.items.forEach((item) => {
+      const y = Math.round(item.transform[5]);
+      if (!rows[y]) rows[y] = [];
+      rows[y].push({ x: item.transform[4], text: item.str });
+    });
+    Object.keys(rows).map(Number).sort((a, b) => b - a).forEach((y) => {
+      const line = rows[y].sort((a, b) => a.x - b.x).map((i) => i.text).join(" ").replace(/\s+/g, " ").trim();
+      if (line) lines.push(line);
+    });
+  }
+  return lines;
+}
+
+function detectStatementBank(fullText) {
+  if (/sacombank/i.test(fullText)) return "sacombank";
+  if (/hsbc/i.test(fullText)) return "hsbc";
+  return null;
+}
+
+// Sacombank: "05-08-2026 07-08-2026 4449 Foody Ho Chi Minh VN 59.000[ CR]"
+function parseSacombankStatement(lines) {
+  const re = /^(\d{2})-(\d{2})-(\d{4})\s+\d{2}-\d{2}-\d{4}\s+\d{3,4}\s+(.+?)\s+([\d.]+)\s*(CR)?$/;
+  const rows = [];
+  lines.forEach((raw) => {
+    const m = raw.match(re);
+    if (!m) return;
+    const [, dd, mm, yyyy, descRaw, amtRaw, cr] = m;
+    const amount = Number(amtRaw.replace(/\./g, ""));
+    if (!amount) return;
+    rows.push({ date: `${yyyy}-${mm}-${dd}`, desc: descRaw.trim(), amount, isCredit: !!cr });
+  });
+  return rows;
+}
+
+// HSBC: "11/08 11/08 OTHER BANK CARDHOLDER PAYMENT 7,885,000.00 CR" (chỉ có ngày/tháng, lấy năm từ ngày lập bảng)
+function parseHsbcStatement(lines, fullText) {
+  const yearMatch = fullText.match(/(\d{2})\/(\d{2})\/(\d{4})/);
+  const baseYear = yearMatch ? Number(yearMatch[3]) : new Date().getFullYear();
+  const baseMonth = yearMatch ? Number(yearMatch[2]) : new Date().getMonth() + 1;
+  const re = /^(\d{2})\/(\d{2})\s+\d{2}\/\d{2}\s+(.+?)\s+([\d,]+)\.\d{2}\s*(CR)?$/;
+  const rows = [];
+  lines.forEach((raw) => {
+    const m = raw.match(re);
+    if (!m) return;
+    const [, dd, mm, descRaw, amtRaw, cr] = m;
+    const amount = Math.round(Number(amtRaw.replace(/,/g, "")));
+    if (!amount) return;
+    let year = baseYear;
+    if (Number(mm) - baseMonth > 6) year -= 1; // sao kê vắt năm (VD: GD tháng 12 trong sao kê tháng 1)
+    rows.push({ date: `${year}-${mm}-${dd}`, desc: descRaw.trim(), amount, isCredit: !!cr });
+  });
+  return rows;
+}
+
+function parseStatementFile(bank, lines, fullText) {
+  if (bank === "sacombank") return parseSacombankStatement(lines);
+  if (bank === "hsbc") return parseHsbcStatement(lines, fullText);
+  return [];
+}
+
+// So khớp danh sách giao dịch đọc từ sao kê với các khoản trong kỳ của app (đã gộp hóa đơn gộp)
+function amountsMatch(a, b, tolerance = 2) {
+  return Math.abs(a - b) <= tolerance;
+}
+
+function matchStatementToApp(statementRows, appItems) {
+  const used = new Set();
+  const matched = [];
+  const missingInApp = [];
+  statementRows.forEach((srow) => {
+    const idx = appItems.findIndex((u, i) => {
+      if (used.has(i)) return false;
+      if (!amountsMatch(u.amount, srow.amount)) return false;
+      const isPayment = u.sign === "-"; // "-" = khoản trả bớt nợ / CR trên sao kê
+      if (srow.isCredit !== isPayment) return false;
+      const uDate = u.tx ? u.tx.date : u.children?.[0]?.tx?.date;
+      if (!uDate) return false;
+      return Math.abs(new Date(uDate) - new Date(srow.date)) <= 2 * 86400000;
+    });
+      if (idx >= 0) { used.add(idx); matched.push({ statement: srow, app: appItems[idx], amountDiff: appItems[idx].amount - srow.amount }); }    else missingInApp.push(srow);
+  });
+  const missingInStatement = appItems.filter((_, i) => !used.has(i));
+  return { matched, missingInApp, missingInStatement };
+}
+
 function lastStatementCutoff(account, refDate) {
   const ref = refDate || new Date();
   const day = ref.getDate();
@@ -620,6 +718,60 @@ function ReconcileRow({ label, value, items, onSelectTx }) {
   );
 }
 
+function StatementMatchedRow({ pair }) {
+  const label = pair.app.tx
+    ? (pair.app.tx.vendor || pair.app.tx.note || pair.app.tx.category || "—")
+    : (pair.app.label.split(" · ")[1] || "Hóa đơn gộp");
+  return (
+    <div className="flex items-center justify-between py-2" style={{ borderBottom: "1px solid " + COLORS.border, gap: 10 }}>
+      <div style={{ minWidth: 0 }}>
+        <div className="sans text-xs" style={{ color: COLORS.textPrimary, display: "flex", alignItems: "center", gap: 6 }}>
+          <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{label}</span>
+          {pair.app.isGroup && (
+            <span className="sans" style={{ fontSize: 10, fontWeight: 600, color: COLORS.bg, background: COLORS.accent, padding: "1px 6px", borderRadius: 999, flexShrink: 0 }}>
+              Gộp ×{pair.app.children.length}
+            </span>
+          )}
+          {pair.app.tx?.refundForTxId && (
+              <span className="sans" style={{ fontSize: 10, fontWeight: 600, color: COLORS.bg, background: COLORS.transfer, padding: "1px 6px", borderRadius: 999, flexShrink: 0 }}>
+                Hoàn tiền
+              </span>
+            )}
+            {pair.amountDiff !== 0 && (
+              <span className="sans" style={{ fontSize: 10, fontWeight: 600, color: COLORS.bg, background: COLORS.warn, padding: "1px 6px", borderRadius: 999, flexShrink: 0 }}>
+                Lệch {pair.amountDiff > 0 ? "+" : ""}{pair.amountDiff}đ
+              </span>
+            )}
+        </div>
+        <div className="sans" style={{ fontSize: 10.5, color: COLORS.textMuted, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+          {fmtDate(pair.statement.date)} · {pair.statement.desc}
+        </div>
+      </div>
+      <span className="mono text-xs" style={{ color: COLORS.accent, flexShrink: 0 }}>{fmtVND(pair.app.amount)}</span>
+    </div>
+  );
+}
+
+function StatementGapRow({ row, tone, actionLabel, onAction }) {
+  const color = tone === "missingApp" ? COLORS.warn : COLORS.expense;
+  const label = row.desc ? row.desc : (row.tx ? (row.tx.vendor || row.tx.note || "—") : row.label?.split(" · ")[1]);
+  return (
+    <div className="flex items-center justify-between py-2" style={{ borderBottom: "1px solid " + COLORS.border, borderLeft: "3px solid " + color, paddingLeft: 8, gap: 10 }}>
+      <div style={{ minWidth: 0 }}>
+        <div className="sans text-xs" style={{ color: COLORS.textPrimary, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{label}</div>
+        <div className="sans" style={{ fontSize: 10.5, color: COLORS.textMuted }}>{fmtDate(row.date)}</div>
+      </div>
+      <div className="flex items-center gap-2" style={{ flexShrink: 0 }}>
+        <span className="mono text-xs" style={{ color }}>{fmtVND(row.amount)}</span>
+        {onAction && (
+          <button onClick={onAction} className="sans" style={{ fontSize: 10.5, fontWeight: 600, color: COLORS.bg, background: color, border: "none", borderRadius: 6, padding: "5px 8px" }}>
+            {actionLabel}
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
 
 function RecurringItemCard({ r, acc, done, pending, txList, unitLabel, onEdit, onRemove, onToggleActive, onLog, onEditTx }) {
   const [open, setOpen] = useState(false);
@@ -1063,6 +1215,16 @@ export default function App() {
   const [dateBasis, setDateBasis] = useState("phatsinh");
   const [reportFrom, setReportFrom] = useState(firstDayThisMonth());
   const [reportTo, setReportTo] = useState(lastDayNextMonth());
+  const [stmtRows, setStmtRows] = useState([]);
+  const [stmtBank, setStmtBank] = useState(null);
+  const [stmtFileName, setStmtFileName] = useState("");
+  const [stmtLoading, setStmtLoading] = useState(false);
+  const [stmtError, setStmtError] = useState("");
+  const [stmtDismissed, setStmtDismissed] = useState(new Set());
+  const [stmtNeedsPassword, setStmtNeedsPassword] = useState(false);
+  const [stmtPasswordInput, setStmtPasswordInput] = useState("");
+  const [stmtPendingFile, setStmtPendingFile] = useState(null);
+  const stmtFileRef = useRef(null);
 
   function shiftReportMonth(delta) {
     const base = new Date(reportFrom + "T00:00:00");
@@ -1361,6 +1523,45 @@ useEffect(() => {
     setIsRefundEntry(false);
     setRefundForTxId(null);
     setRefundSearchQuery("");
+  }
+
+  async function handleStatementUpload(file, password) {
+  if (!file) return;
+  setStmtPendingFile(file);
+  setStmtLoading(true);
+  setStmtError("");
+  setStmtRows([]);
+  setStmtDismissed(new Set());
+  setStmtFileName(file.name);
+  try {
+    const lines = await extractPdfLines(file, password);
+    const fullText = lines.join("\n");
+    const bank = detectStatementBank(fullText);
+    if (!bank) { setStmtError("Không nhận diện được ngân hàng (hiện chỉ hỗ trợ Sacombank, HSBC)."); return; }
+    const rows = parseStatementFile(bank, lines, fullText);
+    if (rows.length === 0) { setStmtError("Không đọc được giao dịch nào từ file này."); return; }
+    setStmtNeedsPassword(false);
+    setStmtBank(bank);
+    setStmtRows(rows);
+  } catch (e) {
+    if (e?.name === "PasswordException") {
+      setStmtNeedsPassword(true);
+      setStmtError(password ? "Sai mật khẩu, thử lại." : "File này có mật khẩu, nhập mật khẩu bên dưới để mở.");
+      return;
+    }
+    console.error(e);
+    setStmtError("Không đọc được file PDF, thử lại hoặc kiểm tra định dạng file.");
+  } finally {
+    setStmtLoading(false);
+  }
+}
+
+  function startTxFromStatement(srow, accountId) {
+    resetEntryForm();
+    setEntryType(srow.isCredit ? "income" : "expense");
+    setForm((f) => ({ ...f, date: srow.date, amount: String(srow.amount), accountId: accountId || f.accountId }));
+    setTab("nhap");
+    setEntryOpen(true);
   }
 
   async function removeCategory(name, type) {
@@ -1766,7 +1967,7 @@ const reconcile = useMemo(() => {
       return t.accountId === acc.id || (t.toAccountId === acc.id && t.type === "transfer");
     });
 
-    const toItemsGrouped = (list) => {
+    const toItemsGrouped = (list, showRefundsAsItems) => {
       const refundsByOrig = {};
       list.forEach((t) => {
         if (t.type === "income" && t.refundForTxId) {
@@ -1793,7 +1994,7 @@ const reconcile = useMemo(() => {
       const seen = new Map();
       const result = [];
       list.forEach((t) => {
-        if (t.type === "income" && t.refundForTxId) return; // hiển thị lồng vào giao dịch gốc bên dưới, không hiện riêng
+        if (t.type === "income" && t.refundForTxId && !showRefundsAsItems) return; // hiển thị lồng vào giao dịch gốc bên dưới, không hiện riêng
         if (!t.splitGroupId) { result.push(toItem(t)); return; }
         if (seen.has(t.splitGroupId)) {
           const g = seen.get(t.splitGroupId);
@@ -1815,9 +2016,10 @@ const reconcile = useMemo(() => {
       return result;
     };
 
-    const closingBalance = Math.max(0, -balanceAsOf(cutoffStr));
-    
     const cycleTxs = txsInRange(addDaysStr(prevCutoffStr, 1), addDaysStr(cutoffStr, 1));
+
+    const closingBalance = Math.max(0, -balanceAsOf(cutoffStr));
+    const openingBalance = Math.max(0, -balanceAsOf(prevCutoffStr));
 
     const paymentsAfterClosingTxs = txsInRange(addDaysStr(cutoffStr, 1), toISODate(new Date(dueDate.getFullYear(), dueDate.getMonth(), dueDate.getDate() + 1))).filter((t) =>
     (t.accountId === acc.id && t.type === "income") || (t.toAccountId === acc.id && t.type === "transfer")
@@ -1842,15 +2044,19 @@ const reconcile = useMemo(() => {
 
         return {
       acc, cutoff, dueDate,
-      closingBalance, cycleItems: toItemsGrouped(cycleTxs),
+closingBalance, openingBalance, cycleItems: toItemsGrouped(cycleTxs),      cycleItemsForMatch: toItemsGrouped(cycleTxs, true),
       tbgdRemaining, tbgdItems: toItemsGrouped([...cycleTxs, ...paymentsAfterClosingTxs]),
       currentBalance, currentItems: toItemsGrouped(currentTxs),
       installmentBalance, installmentItems,
       available,
       duePayment: closingBalance,
     };
-    }, [reconcileAccId, accounts, txs, balances, installmentReserved, recurring, reportFrom, reportTo]);
+  }, [reconcileAccId, accounts, txs, balances, installmentReserved, recurring, reportFrom, reportTo]);
 
+  const stmtMatch = useMemo(() => {
+  if (!reconcile || stmtRows.length === 0) return null;
+  return matchStatementToApp(stmtRows, reconcile.cycleItemsForMatch);
+  }, [stmtRows, reconcile]);
   const netWorth = useMemo(() => accounts.filter((a) => a.includeNetWorth).reduce((s, a) => s + (balances[a.id] || 0), 0), [accounts, balances]);
   const liabilities = useMemo(() => accounts.filter((a) => a.type === "credit" || a.type === "payable").reduce((s, a) => s + Math.max(0, -(balances[a.id] || 0)), 0), [accounts, balances]);
 
@@ -2648,9 +2854,9 @@ const periodExpense = periodTxs.filter((t) => t.type === "expense").reduce((s, t
                         {" · "}Hạn thanh toán {pad(reconcile.dueDate.getDate())}/{pad(reconcile.dueDate.getMonth() + 1)}/{reconcile.dueDate.getFullYear()}
                       </p>
 
+                      <ReconcileRow label="Dư nợ đầu kỳ" value={reconcile.openingBalance} items={null} />
                       <ReconcileRow label="Dư nợ cuối kỳ" value={reconcile.closingBalance} items={reconcile.cycleItems} onSelectTx={setDetailTx} />
-                      <ReconcileRow label="Dư nợ TBGD còn lại" value={reconcile.tbgdRemaining} items={reconcile.tbgdItems} onSelectTx={setDetailTx} />
-                      <ReconcileRow label="Dư nợ hiện tại" value={reconcile.currentBalance} items={reconcile.currentItems} onSelectTx={setDetailTx} />
+                      <ReconcileRow label="Dư nợ TBGD còn lại" value={reconcile.tbgdRemaining} items={reconcile.tbgdItems} onSelectTx={setDetailTx} />                      <ReconcileRow label="Dư nợ hiện tại" value={reconcile.currentBalance} items={reconcile.currentItems} onSelectTx={setDetailTx} />
                       <ReconcileRow label="Dư nợ trả góp" value={reconcile.installmentBalance} items={reconcile.installmentItems} onSelectTx={setDetailTx} />
                       <ReconcileRow label="Số dư khả dụng" value={reconcile.available} items={null} />
                       <ReconcileRow
@@ -2659,6 +2865,96 @@ const periodExpense = periodTxs.filter((t) => t.type === "expense").reduce((s, t
                         items={reconcile.cycleItems}
                         onSelectTx={setDetailTx}
                       />
+                                          <div className="rounded-lg p-3" style={{ background: COLORS.surface, border: "1px solid " + COLORS.border }}>
+                        <p className="sans text-xs" style={{ color: COLORS.textSecondary, marginBottom: 8 }}>So sánh với file sao kê PDF (Sacombank, HSBC)</p>
+
+                        <input
+                          ref={stmtFileRef}
+                          type="file"
+                          accept="application/pdf"
+                          style={{ display: "none" }}
+                          onChange={(e) => e.target.files[0] && handleStatementUpload(e.target.files[0])}
+                        />
+                        <button
+                          onClick={() => stmtFileRef.current?.click()}
+                          className="w-full py-2.5 rounded-md sans text-xs flex items-center justify-center gap-2"
+                          style={{ border: "1px dashed " + COLORS.border, color: COLORS.textSecondary }}
+                        >
+                          <Upload size={14} /> {stmtLoading ? "Đang đọc file..." : stmtFileName ? stmtFileName : "Tải file PDF sao kê lên"}
+                        </button>
+
+                        {stmtError && <p className="sans text-xs" style={{ color: COLORS.expense, marginTop: 8 }}>{stmtError}</p>}
+
+                        {stmtNeedsPassword && (
+                          <div className="flex gap-2" style={{ marginTop: 8 }}>
+                            <input
+                              type="password"
+                              value={stmtPasswordInput}
+                              onChange={(e) => setStmtPasswordInput(e.target.value)}
+                              placeholder="Nhập mật khẩu file PDF"
+                              className="flex-1 sans text-xs px-2 py-2 rounded-md"
+                              style={{ border: "1px solid " + COLORS.border, background: COLORS.bg, color: COLORS.textPrimary }}
+                            />
+                            <button
+                              onClick={() => handleStatementUpload(stmtPendingFile, stmtPasswordInput)}
+                              className="sans text-xs px-3 py-2 rounded-md"
+                              style={{ background: COLORS.accent, color: COLORS.bg, fontWeight: 600 }}
+                            >
+                              Mở file
+                            </button>
+                          </div>
+                        )}
+
+                        {stmtMatch && (
+                          <div className="space-y-3" style={{ marginTop: 12 }}>
+                            <div className="flex justify-between sans text-xs" style={{ color: COLORS.textMuted }}>
+                              <span>Ngân hàng: {stmtBank === "sacombank" ? "Sacombank" : "HSBC"}</span>
+                              <span>Khớp {stmtMatch.matched.length}/{stmtRows.length}</span>
+                            </div>
+
+                            {stmtMatch.missingInApp.length > 0 && (
+                              <div>
+                                <p className="sans text-xs" style={{ color: COLORS.warn, fontWeight: 600, marginBottom: 4 }}>
+                                  Thiếu trong app ({stmtMatch.missingInApp.length})
+                                </p>
+                                {stmtMatch.missingInApp.map((r, i) => (
+                                  <StatementGapRow key={i} row={r} tone="missingApp" actionLabel="+ Tạo GD" onAction={() => startTxFromStatement(r, reconcile.acc.id)} />
+                                ))}
+                              </div>
+                            )}
+
+                            {stmtMatch.missingInStatement.filter((_, i) => !stmtDismissed.has(i)).length > 0 && (
+                              <div>
+                                <p className="sans text-xs" style={{ color: COLORS.expense, fontWeight: 600, marginBottom: 4 }}>
+                                  Thiếu trong sao kê ({stmtMatch.missingInStatement.filter((_, i) => !stmtDismissed.has(i)).length})
+                                </p>
+                                {stmtMatch.missingInStatement.map((u, i) => (
+                                  stmtDismissed.has(i) ? null : (
+                                    <StatementGapRow
+                                      key={i}
+                                      row={{ date: u.tx ? u.tx.date : u.children?.[0]?.tx?.date, amount: u.amount, label: u.label }}
+                                      tone="missingStatement"
+                                      actionLabel="Bỏ qua"
+                                      onAction={() => setStmtDismissed((prev) => new Set(prev).add(i))}
+                                    />
+                                  )
+                                ))}
+                              </div>
+                            )}
+
+                            {stmtMatch.matched.length > 0 && (
+                              <div>
+                                <p className="sans text-xs" style={{ color: COLORS.accent, fontWeight: 600, marginBottom: 4 }}>
+                                  Đã khớp ({stmtMatch.matched.length})
+                                </p>
+                                {stmtMatch.matched.map((pair, i) => (
+                                  <StatementMatchedRow key={i} pair={pair} />
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </div>
                     </div>
                   )}
                 </>
