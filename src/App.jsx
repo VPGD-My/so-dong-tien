@@ -1550,7 +1550,7 @@ useEffect(() => {
       return;
     }
     console.error(e);
-    setStmtError("Không đọc được file PDF, thử lại hoặc kiểm tra định dạng file.");
+    setStmtError("Không đọc được file PDF: " + (e?.message || e?.name || "lỗi không xác định") + " — thử lại hoặc kiểm tra định dạng file.");
   } finally {
     setStmtLoading(false);
   }
