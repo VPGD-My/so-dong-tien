@@ -12,6 +12,15 @@ import Login from "./Login";
 import * as pdfjsLib from "pdfjs-dist";
 pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.mjs`;
 
+// Polyfill cho Safari iOS < 17.4 (thiếu Promise.withResolvers, pdfjs-dist 5.x cần API này)
+if (typeof Promise.withResolvers !== "function") {
+  Promise.withResolvers = function () {
+    let resolve, reject;
+    const promise = new Promise((res, rej) => { resolve = res; reject = rej; });
+    return { promise, resolve, reject };
+  };
+}
+
 function accFromDb(row) {
   return {
     id: row.id, name: row.name, type: row.type,
