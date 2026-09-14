@@ -21,6 +21,23 @@ if (typeof Promise.withResolvers !== "function") {
   };
 }
 
+// Polyfill cho Safari iOS cũ (thiếu for-await trên ReadableStream, dùng trong getTextContent())
+if (typeof ReadableStream !== "undefined" && !ReadableStream.prototype[Symbol.asyncIterator]) {
+  ReadableStream.prototype[Symbol.asyncIterator] = function () {
+    const reader = this.getReader();
+    return {
+      next() {
+        return reader.read().then(({ done, value }) => (done ? { done: true, value: undefined } : { done: false, value }));
+      },
+      return(value) {
+        reader.releaseLock();
+        return Promise.resolve({ done: true, value });
+      },
+      [Symbol.asyncIterator]() { return this; },
+    };
+  };
+}
+
 function accFromDb(row) {
   return {
     id: row.id, name: row.name, type: row.type,
