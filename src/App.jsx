@@ -10,8 +10,7 @@ import { PieChart, Pie, Cell, Tooltip, Legend, ResponsiveContainer, LineChart, L
 import { supabase } from "./supabaseClient";
 import Login from "./Login";
 import * as pdfjsLib from "pdfjs-dist";
-import pdfjsWorkerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
-pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorkerUrl;
+pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.mjs`;
 
 function accFromDb(row) {
   return {
@@ -1550,8 +1549,8 @@ useEffect(() => {
       return;
     }
     console.error(e);
-    setStmtError("Không đọc được file PDF, thử lại hoặc kiểm tra định dạng file.");
-  } finally {
+    setStmtError("Không đọc được file PDF: " + (e?.message || e?.name || "lỗi không xác định") + " — thử lại hoặc kiểm tra định dạng file.");
+} finally {
     setStmtLoading(false);
   }
 }
