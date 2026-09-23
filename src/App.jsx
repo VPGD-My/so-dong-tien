@@ -335,23 +335,68 @@ function amountsMatch(a, b, tolerance = 2) {
   return Math.abs(a - b) <= tolerance;
 }
 
+function isAppItemMatch(u, srow) {
+  if (!amountsMatch(u.amount, srow.amount)) return false;
+  const isPayment = u.sign === "-"; // "-" = khoản trả bớt nợ / CR trên sao kê
+  if (srow.isCredit !== isPayment) return false;
+  const uDate = u.tx ? u.tx.date : u.children?.[0]?.tx?.date;
+  if (!uDate) return false;
+  return Math.abs(new Date(uDate) - new Date(srow.date)) <= 2 * 86400000;
+}
+
 function matchStatementToApp(statementRows, appItems) {
-  const used = new Set();
-  const matched = [];
-  const missingInApp = [];
-  statementRows.forEach((srow) => {
-    const idx = appItems.findIndex((u, i) => {
-      if (used.has(i)) return false;
-      if (!amountsMatch(u.amount, srow.amount)) return false;
-      const isPayment = u.sign === "-"; // "-" = khoản trả bớt nợ / CR trên sao kê
-      if (srow.isCredit !== isPayment) return false;
-      const uDate = u.tx ? u.tx.date : u.children?.[0]?.tx?.date;
-      if (!uDate) return false;
-      return Math.abs(new Date(uDate) - new Date(srow.date)) <= 2 * 86400000;
-    });
-      if (idx >= 0) { used.add(idx); matched.push({ statement: srow, app: appItems[idx], amountDiff: appItems[idx].amount - srow.amount }); }    else missingInApp.push(srow);
+  // Trải phẳng: giao dịch thường + từng giao dịch con của nhóm gộp
+  const singles = [];
+  const singleIdxOf = appItems.map((it, gi) => {
+    if (it.isGroup) { it.children.forEach((c) => singles.push({ item: c, groupIdx: gi })); return null; }
+    singles.push({ item: it, groupIdx: null });
+    return singles.length - 1;
   });
-  const missingInStatement = appItems.filter((_, i) => !used.has(i));
+
+  // Vòng 1: ưu tiên khớp giao dịch con / giao dịch đơn
+  const usedSingle = new Set();
+  const matched = [];
+  const leftRows = [];
+  statementRows.forEach((srow) => {
+    const idx = singles.findIndex((s, i) => !usedSingle.has(i) && isAppItemMatch(s.item, srow));
+    if (idx >= 0) {
+      usedSingle.add(idx);
+      const u = singles[idx].item;
+      matched.push({ statement: srow, app: u, amountDiff: u.amount - srow.amount });
+    } else leftRows.push(srow);
+  });
+
+  // Vòng 2: nhóm gộp, chỉ tính tổng các con CHƯA khớp ở vòng 1
+  const restOf = (gi) => singles.filter((s, i) => s.groupIdx === gi && !usedSingle.has(i)).map((s) => s.item);
+  const remainingGroups = new Map();
+  appItems.forEach((it, gi) => {
+    if (!it.isGroup) return;
+    const rest = restOf(gi);
+    if (rest.length < 2) return; // 0 con: đã khớp hết; 1 con: đã thử ở vòng 1
+    remainingGroups.set(gi, { ...it, amount: rest.reduce((s, c) => s + c.amount, 0), children: rest });
+  });
+
+  const usedGroup = new Set();
+  const missingInApp = [];
+  leftRows.forEach((srow) => {
+    const hit = [...remainingGroups].find(([gi, g]) => !usedGroup.has(gi) && isAppItemMatch(g, srow));
+    if (hit) {
+      usedGroup.add(hit[0]);
+      matched.push({ statement: srow, app: hit[1], amountDiff: hit[1].amount - srow.amount });
+    } else missingInApp.push(srow);
+  });
+
+  // Giữ thứ tự "Đã khớp" theo thứ tự dòng sao kê
+  matched.sort((a, b) => statementRows.indexOf(a.statement) - statementRows.indexOf(b.statement));
+
+  // Thiếu trong sao kê: giữ thứ tự gốc của app
+  const missingInStatement = [];
+  appItems.forEach((it, gi) => {
+    if (!it.isGroup) { if (!usedSingle.has(singleIdxOf[gi])) missingInStatement.push(it); return; }
+    if (remainingGroups.has(gi)) { if (!usedGroup.has(gi)) missingInStatement.push(remainingGroups.get(gi)); return; }
+    missingInStatement.push(...restOf(gi)); // nhóm chỉ còn 1 con chưa khớp → hiện con đó
+  });
+
   return { matched, missingInApp, missingInStatement };
 }
 
