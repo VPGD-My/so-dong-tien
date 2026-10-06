@@ -72,6 +72,7 @@ function txFromDb(row) {
     vendor: row.vendor,
     note: row.note,
     recurringId: row.recurring_id,       // ← thêm dòng này
+    occurrenceIndex: row.occurrence_index ?? null,
     splitGroupId: row.split_group_id,    // ← thêm dòng này
     refundForTxId: row.refund_for_tx_id, // ← thêm dòng này
   };
@@ -1533,7 +1534,10 @@ useEffect(() => {
     setTxs(txs.filter((t) => t.id !== id));
     if (target?.recurringId) {
       const r = recurring.find((x) => x.id === target.recurringId);
-      if (r && r.doneCount > 0) {
+      // Chỉ lùi done_count khi xoá đúng kỳ cuối cùng. Xoá một kỳ ở giữa mà vẫn lùi
+      // sẽ làm lần ghi tiếp theo trùng occurrence_index với kỳ còn tồn tại → bị DB từ chối mãi.
+      const isLastOccurrence = target.occurrenceIndex == null || target.occurrenceIndex === r?.doneCount - 1;
+      if (r && r.doneCount > 0 && isLastOccurrence) {
         const newDoneCount = r.doneCount - 1;
         const { error: rErr } = await supabase.from("recurring_items").update({ done_count: newDoneCount }).eq("id", r.id);
         if (!rErr) setRecurring((prev) => prev.map((x) => x.id === r.id ? { ...x, doneCount: newDoneCount } : x));
@@ -1855,10 +1859,14 @@ async function toggleRecurringActive(r) {
 
   if (error) {
     if (error.message?.includes("STALE_DONE_COUNT") || error.code === "23505") {
-      // Kỳ này đã được ghi nhận từ lần chạy khác rồi — không phải lỗi thật
+      // Kỳ này đã được ghi nhận từ lần chạy khác rồi — đồng bộ lại done_count từ DB
+      // để state local không bị kẹt ở số cũ (nếu không, nút Ghi nhận sẽ lặp lại lỗi này mãi)
+      const { data: fresh } = await supabase.from("recurring_items").select("*").eq("id", r.id).single();
+      if (fresh) setRecurring((prev) => prev.map((x) => x.id === r.id ? recFromDb(fresh) : x));
       return true;
     }
-    console.error(error);
+    console.error("log_recurring_occurrence lỗi:", error);
+    showToast("Không ghi nhận được: " + (error.message || "lỗi không xác định"));
     return false;
   }
 
