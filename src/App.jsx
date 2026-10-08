@@ -2332,6 +2332,20 @@ closingBalance, openingBalance, cycleItems: toItemsGrouped(cycleTxs),      cycle
     return g;
   }, [txs, accounts]);
 
+  // Dòng hoàn tiền chỉ được ẩn (để hiện lồng dưới giao dịch gốc) khi giao dịch gốc
+  // cũng nằm trong khoảng báo cáo VÀ cùng nhóm (tài khoản / thành viên). Nếu không,
+  // hiện nó như một dòng riêng để khoản hoàn không bị mất khỏi báo cáo.
+  const filteredTxById = useMemo(() => {
+    const g = {};
+    filteredTxs.forEach((t) => { g[t.id] = t; });
+    return g;
+  }, [filteredTxs]);
+  const isNestedRefund = (t, sameGroup) => {
+    if (!(t.type === "income" && t.refundForTxId)) return false;
+    const orig = filteredTxById[t.refundForTxId];
+    return !!orig && sameGroup(orig);
+  };
+
   const byVendor = useMemo(() => {
     const g = {};
     filteredTxs.filter((t) => t.type === "expense" && t.vendor).forEach((t) => {
@@ -2655,7 +2669,7 @@ const periodExpense = periodTxs.filter((t) => t.type === "expense").reduce((s, t
                 {Object.entries(byCategory.exp).sort((a, b) => b[1] - a[1]).map(([cat, amt]) => {
                   const max = Math.max(...Object.values(byCategory.exp));
                   const txList = filteredTxs.filter((t) => t.type === "expense" && t.category === cat);
-                  return <CategoryRow key={cat} label={cat} amount={amt} max={max} color={COLORS.expense} txList={txList} onEditTx={setDetailTx} refundMap={refundsByOriginalTxId} />;
+                  return <CategoryRow key={cat} label={cat} amount={amt} max={max} color={COLORS.expense} txList={txList} onEditTx={setDetailTx} refundMap={refundsByOriginalTxIdAll} />;
                 })}
                 {pieExpense.length === 0 && <p className="sans text-xs" style={{ color: COLORS.textMuted }}>Không có dữ liệu trong khoảng ngày đã chọn.</p>}
               </div>
@@ -2828,8 +2842,7 @@ const periodExpense = periodTxs.filter((t) => t.type === "expense").reduce((s, t
             <div className="space-y-2">
                 {accounts.map((a) => {
                 const d = byAccount[a.id] || { income: 0, expense: 0 };
-                const txList = groupSplitTxs(filteredTxs.filter((t) => (t.accountId === a.id || t.toAccountId === a.id) && !(t.type === "income" && t.refundForTxId)));
-                return <AccountReportCard key={a.id} account={a} data={d} balance={balances[a.id] || 0} txList={txList} onEditTx={setDetailTx} onEditGroup={startEditSplitGroup} refundMap={refundsByOriginalTxId} />;
+                const txList = groupSplitTxs(filteredTxs.filter((t) => (t.accountId === a.id || t.toAccountId === a.id) && !isNestedRefund(t, (o) => o.accountId === a.id)));                return <AccountReportCard key={a.id} account={a} data={d} balance={balances[a.id] || 0} txList={txList} onEditTx={setDetailTx} onEditGroup={startEditSplitGroup} refundMap={refundsByOriginalTxIdAll} />;
               })}
             </div>
           )}
@@ -2837,8 +2850,7 @@ const periodExpense = periodTxs.filter((t) => t.type === "expense").reduce((s, t
           {reportView === "thanhvien" && (
             <div className="space-y-2">
               {Object.entries(byMember).map(([m, d]) => {
-                const txList = filteredTxs.filter((t) => t.type !== "transfer" && !(t.type === "income" && t.refundForTxId) && (t.member || "Chưa gán thành viên") === m);
-                return <MemberReportCard key={m} member={m} data={d} txList={txList} onEditTx={setDetailTx} refundMap={refundsByOriginalTxId} />;
+                const txList = filteredTxs.filter((t) => t.type !== "transfer" && !isNestedRefund(t, (o) => (o.member || "Chưa gán thành viên") === m) && (t.member || "Chưa gán thành viên") === m);                return <MemberReportCard key={m} member={m} data={d} txList={txList} onEditTx={setDetailTx} refundMap={refundsByOriginalTxIdAll} />;
               })}
             </div>
           )}
@@ -2849,7 +2861,7 @@ const periodExpense = periodTxs.filter((t) => t.type === "expense").reduce((s, t
               {Object.entries(byVendor).sort((a, b) => b[1] - a[1]).map(([ven, amt]) => {
                 const max = Math.max(...Object.values(byVendor));
                 const txList = filteredTxs.filter((t) => t.type === "expense" && t.vendor === ven);
-                return <CategoryRow key={ven} label={ven} amount={amt} max={max} color={COLORS.expense} txList={txList} onEditTx={setDetailTx} refundMap={refundsByOriginalTxId} />;
+                return <CategoryRow key={ven} label={ven} amount={amt} max={max} color={COLORS.expense} txList={txList} onEditTx={setDetailTx} refundMap={refundsByOriginalTxIdAll} />;
               })}
               {Object.keys(byVendor).length === 0 && <p className="sans text-xs" style={{ color: COLORS.textMuted }}>Không có dữ liệu NCC trong khoảng ngày đã chọn.</p>}
             </div>
