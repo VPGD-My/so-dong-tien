@@ -1,4 +1,5 @@
 import React, { useState, useMemo, useEffect, useRef } from "react";
+import { createPortal } from "react-dom";
 import {
   Plus, Wallet, CreditCard, Banknote, TrendingDown, TrendingUp, Trash2,
   ArrowRight, ArrowRightLeft, ArrowDownCircle, Landmark, PiggyBank, Repeat,
@@ -482,7 +483,7 @@ function formatExprDisplay(expr) {
     });
 }
 
-function CalcKeypad({ onKey, onClear, onBackspace, onEqual, onDone }) {
+function CalcKeypad({ onKey, onClear, onBackspace, onEqual, onDone, onNext }) {
   const keys = [
     ["7", "8", "9", "÷"],
     ["4", "5", "6", "×"],
@@ -522,38 +523,98 @@ function CalcKeypad({ onKey, onClear, onBackspace, onEqual, onDone }) {
         <button type="button" onClick={() => onKey("%")} className="mono rounded-lg" style={{ background: COLORS.accentDark, color: COLORS.textPrimary, border: "1px solid " + COLORS.border, fontSize: 20, padding: "14px 0", flex: 1 }}>%</button>
         <button type="button" onClick={onEqual} className="mono rounded-lg" style={{ background: COLORS.accent, color: COLORS.bg, fontWeight: 700, fontSize: 18, padding: "14px 0", flex: 1 }}>=</button>
         <button type="button" onClick={onDone} className="sans rounded-lg" style={{ border: "1px solid " + COLORS.cream, color: COLORS.cream, fontSize: 15, padding: "14px 0", flex: 1 }}>Xong</button>
+        {onNext && <button type="button" onClick={onNext} className="sans rounded-lg" style={{ background: COLORS.cream, color: COLORS.bg, fontWeight: 700, fontSize: 15, padding: "14px 0", flex: 1 }}>Tiếp ›</button>}
       </div>
     </div>
   );
+}
+
+// Tìm khung cuộn gần nhất (modal nhập giao dịch có overflowY: auto riêng)
+function getScrollParent(el) {
+  let p = el?.parentElement;
+  while (p && p !== document.body) {
+    const oy = getComputedStyle(p).overflowY;
+    if (oy === "auto" || oy === "scroll") return p;
+    p = p.parentElement;
+  }
+  return null;
 }
 
 function AmountInput({ value, onChange, placeholder = "0", align = "left" }) {
   const [open, setOpen] = useState(false);
   const [expr, setExpr] = useState("");
   const [justEvaluated, setJustEvaluated] = useState(false);
+  const [hasNext, setHasNext] = useState(false);
   const wrapRef = useRef(null);
+  const inputRef = useRef(null);
+  const padRef = useRef(null);
+  const exprRef = useRef("");
+  exprRef.current = expr;
+
+  function openPad() {
+    if (open) return;
+    setOpen(true);
+    setExpr(value ? String(value) : "");
+    setJustEvaluated(false);
+    const all = Array.from(document.querySelectorAll("input[data-amount-input]")).filter((el) => el.offsetParent !== null);
+    setHasNext(all.indexOf(inputRef.current) > -1 && all.indexOf(inputRef.current) < all.length - 1);
+  }
 
   function commitAndClose() {
-    const result = evalExpr(expr);
+    const result = evalExpr(exprRef.current);
     if (result !== null) onChange(String(Math.round(result * 100) / 100));
     setOpen(false);
     setExpr("");
     setJustEvaluated(false);
+    inputRef.current?.blur();
   }
 
+  function goNext() {
+    const all = Array.from(document.querySelectorAll("input[data-amount-input]")).filter((el) => el.offsetParent !== null);
+    const next = all[all.indexOf(inputRef.current) + 1];
+    commitAndClose();
+    if (next) setTimeout(() => next.focus(), 0);
+  }
+
+  // Đóng khi CHẠM (click) ra ngoài — không dùng touchstart nữa, nên vuốt/cuộn trang
+  // hoặc cuộn ngang dãy danh mục sẽ không làm tắt bàn phím.
   useEffect(() => {
     if (!open) return;
     function handleClickOutside(e) {
-      if (wrapRef.current && !wrapRef.current.contains(e.target)) commitAndClose();
+      if (!document.body.contains(e.target)) return; // nút vừa bị gỡ khỏi DOM
+      if (wrapRef.current?.contains(e.target)) return;
+      if (padRef.current?.contains(e.target)) return;
+      commitAndClose();
     }
-    document.addEventListener("mousedown", handleClickOutside);
-    document.addEventListener("touchstart", handleClickOutside);
-    return () => {
-      document.removeEventListener("mousedown", handleClickOutside);
-      document.removeEventListener("touchstart", handleClickOutside);
-    };
+    // capture = true: modal nhập giao dịch có stopPropagation, nghe ở pha capture mới bắt được
+    document.addEventListener("click", handleClickOutside, true);
+    return () => document.removeEventListener("click", handleClickOutside, true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, expr]);
+  }, [open]);
+
+  // Khi mở: đo chiều cao bàn phím, rồi cuộn để ô nhập nằm ngay trên bàn phím
+  useEffect(() => {
+    if (!open) return;
+    // Thêm khoảng trống dưới khung cuộn để nội dung cuối trang vẫn cuộn lên được, không bị bàn phím che
+    const scroller = getScrollParent(wrapRef.current) || document.body;
+    const prevPadding = scroller.style.paddingBottom;
+    const id = requestAnimationFrame(() => {
+      const h = padRef.current?.offsetHeight || 340;
+      scroller.style.paddingBottom = h + 16 + "px";
+      requestAnimationFrame(() => {
+        const rect = inputRef.current?.getBoundingClientRect();
+        if (!rect) return;
+        const visibleBottom = window.innerHeight - h - 16;
+        const delta = rect.bottom - visibleBottom;
+        if (delta > 0 || rect.top < 0) {
+          const dy = delta > 0 ? delta : rect.top - 16;
+          if (scroller !== document.body) scroller.scrollBy({ top: dy, behavior: "smooth" });
+          else window.scrollBy({ top: dy, behavior: "smooth" });
+        }
+      });
+    });
+    return () => { cancelAnimationFrame(id); scroller.style.paddingBottom = prevPadding; };
+  }, [open]);
 
   const display = open ? formatExprDisplay(expr) : (value ? Number(value).toLocaleString("vi-VN") : "");
 
@@ -578,30 +639,45 @@ function AmountInput({ value, onChange, placeholder = "0", align = "left" }) {
   return (
     <div ref={wrapRef} style={{ position: "relative" }}>
       <input
+        ref={inputRef}
+        data-amount-input=""
         inputMode="none"
         readOnly
         className="mono"
-        style={{ textAlign: align }}
+        style={{ textAlign: align, ...(open ? { borderColor: COLORS.cream } : {}) }}
         placeholder={placeholder}
         value={display}
-        onFocus={() => { setOpen(true); setExpr(value ? String(value) : ""); setJustEvaluated(false); }}
+        onFocus={openPad}
+        onClick={openPad}
       />
-      {open && (
-        <div style={{ marginTop: 6 }}>
-          <CalcKeypad
-            onKey={handleKey}
-            onClear={() => { setJustEvaluated(false); setExpr(""); }}
-            onBackspace={() => { setJustEvaluated(false); setExpr((e) => e.slice(0, -1)); }}
-            onEqual={() => {
-              const result = evalExpr(expr);
-              if (result !== null) {
-                setExpr(String(Math.round(result * 100) / 100));
-                setJustEvaluated(true);
-              }
-            }}
-            onDone={commitAndClose}
-          />
-        </div>
+      {open && createPortal(
+        <div
+          ref={padRef}
+          onClick={(e) => e.stopPropagation()}
+          style={{ position: "fixed", left: 0, right: 0, bottom: 0, zIndex: 60, display: "flex", justifyContent: "center", pointerEvents: "none" }}
+        >
+          <div style={{ width: "100%", maxWidth: 480, pointerEvents: "auto", background: COLORS.surface, borderTop: "1px solid " + COLORS.border, boxShadow: "0 -6px 20px rgba(0,0,0,0.45)", padding: "8px 8px calc(8px + env(safe-area-inset-bottom, 0px))", borderRadius: "14px 14px 0 0" }}>
+            <div className="flex justify-between items-baseline px-2 pb-2">
+              <span className="sans text-xs" style={{ color: COLORS.textMuted }}>{placeholder !== "0" ? placeholder : "Số tiền"}</span>
+              <span className="mono" style={{ color: COLORS.cream, fontSize: 20, fontWeight: 700, wordBreak: "break-all", textAlign: "right" }}>{display || "0"}</span>
+            </div>
+            <CalcKeypad
+              onKey={handleKey}
+              onClear={() => { setJustEvaluated(false); setExpr(""); }}
+              onBackspace={() => { setJustEvaluated(false); setExpr((e) => e.slice(0, -1)); }}
+              onEqual={() => {
+                const result = evalExpr(expr);
+                if (result !== null) {
+                  setExpr(String(Math.round(result * 100) / 100));
+                  setJustEvaluated(true);
+                }
+              }}
+              onDone={commitAndClose}
+              onNext={hasNext ? goNext : undefined}
+            />
+          </div>
+        </div>,
+        document.body
       )}
     </div>
   );
@@ -2842,7 +2918,8 @@ const periodExpense = periodTxs.filter((t) => t.type === "expense").reduce((s, t
             <div className="space-y-2">
                 {accounts.map((a) => {
                 const d = byAccount[a.id] || { income: 0, expense: 0 };
-                const txList = groupSplitTxs(filteredTxs.filter((t) => (t.accountId === a.id || t.toAccountId === a.id) && !isNestedRefund(t, (o) => o.accountId === a.id)));                return <AccountReportCard key={a.id} account={a} data={d} balance={balances[a.id] || 0} txList={txList} onEditTx={setDetailTx} onEditGroup={startEditSplitGroup} refundMap={refundsByOriginalTxIdAll} />;
+                const txList = groupSplitTxs(filteredTxs.filter((t) => (t.accountId === a.id || t.toAccountId === a.id) && !isNestedRefund(t, (o) => o.accountId === a.id)));
+                return <AccountReportCard key={a.id} account={a} data={d} balance={balances[a.id] || 0} txList={txList} onEditTx={setDetailTx} onEditGroup={startEditSplitGroup} refundMap={refundsByOriginalTxIdAll} />;
               })}
             </div>
           )}
@@ -2850,7 +2927,8 @@ const periodExpense = periodTxs.filter((t) => t.type === "expense").reduce((s, t
           {reportView === "thanhvien" && (
             <div className="space-y-2">
               {Object.entries(byMember).map(([m, d]) => {
-                const txList = filteredTxs.filter((t) => t.type !== "transfer" && !isNestedRefund(t, (o) => (o.member || "Chưa gán thành viên") === m) && (t.member || "Chưa gán thành viên") === m);                return <MemberReportCard key={m} member={m} data={d} txList={txList} onEditTx={setDetailTx} refundMap={refundsByOriginalTxIdAll} />;
+                const txList = filteredTxs.filter((t) => t.type !== "transfer" && !isNestedRefund(t, (o) => (o.member || "Chưa gán thành viên") === m) && (t.member || "Chưa gán thành viên") === m);
+                return <MemberReportCard key={m} member={m} data={d} txList={txList} onEditTx={setDetailTx} refundMap={refundsByOriginalTxIdAll} />;
               })}
             </div>
           )}
@@ -3254,8 +3332,8 @@ const periodExpense = periodTxs.filter((t) => t.type === "expense").reduce((s, t
              {newAcc.type === "credit" && (
                 <>
                   <div className="flex gap-2">
-                    <div className="flex-1"><label className="lbl">Ngày chốt sao kê</label><input type="number" min="1" max="31" value={newAcc.statementDay} onChange={(e) => setNewAcc({ ...newAcc, statementDay: e.target.value })} /></div>
-                    <div className="flex-1"><label className="lbl">Ngày hạn TT</label><input type="number" min="1" max="31" value={newAcc.dueDay} onChange={(e) => setNewAcc({ ...newAcc, dueDay: e.target.value })} /></div>
+                    <div className="flex-1"><label className="lbl">Ngày chốt sao kê</label><input type="text" inputMode="numeric" pattern="[0-9]*" maxLength={2} value={newAcc.statementDay} onChange={(e) => setNewAcc({ ...newAcc, statementDay: e.target.value.replace(/[^\d]/g, "") })} /></div>
+                    <div className="flex-1"><label className="lbl">Ngày hạn TT</label><input type="text" inputMode="numeric" pattern="[0-9]*" maxLength={2} value={newAcc.dueDay} onChange={(e) => setNewAcc({ ...newAcc, dueDay: e.target.value.replace(/[^\d]/g, "") })} /></div>
                   </div>
                   <div>
                     <label className="lbl">Hạn thanh toán rơi vào</label>
