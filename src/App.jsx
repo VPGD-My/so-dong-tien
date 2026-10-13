@@ -549,10 +549,12 @@ function AmountInput({ value, onChange, placeholder = "0", align = "left" }) {
   const inputRef = useRef(null);
   const padRef = useRef(null);
   const exprRef = useRef("");
+  const openedAtRef = useRef(0);
   exprRef.current = expr;
 
   function openPad() {
     if (open) return;
+    openedAtRef.current = Date.now();
     setOpen(true);
     setExpr(value ? String(value) : "");
     setJustEvaluated(false);
@@ -573,7 +575,7 @@ function AmountInput({ value, onChange, placeholder = "0", align = "left" }) {
     const all = Array.from(document.querySelectorAll("input[data-amount-input]")).filter((el) => el.offsetParent !== null);
     const next = all[all.indexOf(inputRef.current) + 1];
     commitAndClose();
-    if (next) setTimeout(() => next.focus(), 0);
+    if (next) setTimeout(() => next.click(), 0);
   }
 
   // Đóng khi CHẠM (click) ra ngoài — không dùng touchstart nữa, nên vuốt/cuộn trang
@@ -647,13 +649,17 @@ function AmountInput({ value, onChange, placeholder = "0", align = "left" }) {
         style={{ textAlign: align, ...(open ? { borderColor: COLORS.cream } : {}) }}
         placeholder={placeholder}
         value={display}
-        onFocus={openPad}
         onClick={openPad}
+        onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openPad(); } }}
       />
       {open && createPortal(
         <div
           ref={padRef}
           onClick={(e) => e.stopPropagation()}
+          onClickCapture={(e) => {
+            // Chặn "click ma": cú chạm mở bàn phím có thể rơi trúng nút trên bàn phím vừa hiện ra
+            if (Date.now() - openedAtRef.current < 400) { e.stopPropagation(); e.preventDefault(); }
+          }}
           style={{ position: "fixed", left: 0, right: 0, bottom: 0, zIndex: 60, display: "flex", justifyContent: "center", pointerEvents: "none" }}
         >
           <div style={{ width: "100%", maxWidth: 480, pointerEvents: "auto", background: COLORS.surface, borderTop: "1px solid " + COLORS.border, boxShadow: "0 -6px 20px rgba(0,0,0,0.45)", padding: "8px 8px calc(8px + env(safe-area-inset-bottom, 0px))", borderRadius: "14px 14px 0 0" }}>
@@ -2615,7 +2621,7 @@ const periodExpense = periodTxs.filter((t) => t.type === "expense").reduce((s, t
         <div className="w-8 h-8 rounded-full flex items-center justify-center" style={{ background: COLORS.cream }}>
           <Wallet size={16} color={COLORS.bg} />
         </div>
-        <h1 className="text-xl" style={{ fontWeight: 600 }}>Sổ Dòng Tiền</h1>
+        <h1 className="text-xl" style={{ fontWeight: 600 }}>MyMoney</h1>
         <button onClick={() => supabase.auth.signOut()} className="sans text-xs" style={{ color: COLORS.textMuted }}>
           Đăng xuất
         </button>
