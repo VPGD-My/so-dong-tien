@@ -1325,6 +1325,413 @@ function SplitGroupRow({ group, onEditTx, onEditGroup, refundMap }) {
   );
 }
 
+// ===================== KẾ HOẠCH DÒNG TIỀN THÁNG SAU =====================
+// Dữ liệu tuỳ chỉnh lưu ở bảng cashflow_plans: mỗi tháng kế hoạch một dòng (month = "YYYY-MM"),
+// thêm một dòng month = "default" để nhớ số tiền để dành mặc định cho các tháng sau.
+const PLAN_EMPTY = { basis: "prev", salary: null, other: null, saving: null, offCats: {}, offRecs: {}, extraInc: [], extraExp: [] };
+const isSalaryCat = (c) => /lương|luong|salary/i.test(c || "");
+const ymKey = (y, m) => { const d = new Date(y, m, 1); return `${d.getFullYear()}-${pad(d.getMonth() + 1)}`; };
+const fmtDM = (d) => `${pad(d.getDate())}/${pad(d.getMonth() + 1)}`;
+const newRowId = () => Math.random().toString(36).slice(2, 10);
+
+function PlanLine({ name, sub, subColor, amount, right, muted, strike, children }) {
+  return (
+    <div className="flex items-center gap-2 py-2.5" style={{ borderBottom: "1px dashed " + COLORS.border, minHeight: 44 }}>
+      {children}
+      <div className="flex-1 min-w-0">
+        <p className="sans text-sm" style={{ color: muted ? COLORS.textSecondary : COLORS.textPrimary }}>{name}</p>
+        {sub && <p className="sans" style={{ fontSize: 11, color: subColor || COLORS.textSecondary }}>{sub}</p>}
+      </div>
+      {amount !== undefined && (
+        <span className="mono text-sm" style={{ color: muted ? COLORS.textSecondary : COLORS.textPrimary, textDecoration: strike ? "line-through" : "none", flexShrink: 0 }}>
+          {Math.round(amount).toLocaleString("vi-VN")}
+        </span>
+      )}
+      {right}
+    </div>
+  );
+}
+
+function PlanGroupTitle({ children }) {
+  return <p className="sans text-xs pt-3" style={{ color: COLORS.textSecondary, fontWeight: 600 }}>{children}</p>;
+}
+
+function PlanAmountCell({ value, onChange, edited, onReset }) {
+  return (
+    <div className="flex items-center gap-1" style={{ flexShrink: 0 }}>
+      {edited && (
+        <button type="button" onClick={onReset} aria-label="Dùng lại số tự động" title="Dùng lại số tự động"
+          className="flex items-center justify-center" style={{ width: 32, height: 32, borderRadius: 8, border: "1px solid " + COLORS.border, color: COLORS.textSecondary }}>
+          <Repeat size={13} />
+        </button>
+      )}
+      <div style={{ width: 128 }}>
+        <AmountInput value={value ? String(value) : ""} onChange={(v) => { if (Math.round(Number(v) || 0) !== Math.round(value || 0)) onChange(v); }} align="right" />
+      </div>
+    </div>
+  );
+}
+
+function CashflowPlanCard({ txs, accounts, recurring }) {
+  const today = new Date();
+  const todayStr = toISODate(today);
+  const planY = new Date(today.getFullYear(), today.getMonth() + 1, 1);
+  const planKey = ymKey(planY.getFullYear(), planY.getMonth());
+  const planStart = toISODate(planY);
+  const planEnd = toISODate(new Date(planY.getFullYear(), planY.getMonth() + 1, 0));
+  const inPlan = (d) => { const s = toISODate(d); return s >= planStart && s <= planEnd; };
+
+  const [plan, setPlan] = useState(PLAN_EMPTY);
+  const [defaultSaving, setDefaultSaving] = useState(null);
+  const [loaded, setLoaded] = useState(false);
+  const [saveError, setSaveError] = useState("");
+  const [visaOpen, setVisaOpen] = useState({});
+  const saveTimer = useRef(null);
+
+  // Tải kế hoạch đã lưu
+  useEffect(() => {
+    let alive = true;
+    supabase.from("cashflow_plans").select("month, data").in("month", [planKey, "default"]).then(({ data, error }) => {
+      if (!alive) return;
+      if (error) { console.error("cashflow_plans:", error); setSaveError("Chưa lưu được tuỳ chỉnh (thiếu bảng cashflow_plans trên Supabase)."); }
+      const row = data?.find((r) => r.month === planKey);
+      const def = data?.find((r) => r.month === "default");
+      if (row?.data) setPlan({ ...PLAN_EMPTY, ...row.data });
+      if (def?.data?.saving != null) setDefaultSaving(def.data.saving);
+      setLoaded(true);
+    });
+    return () => { alive = false; };
+  }, [planKey]);
+
+  function persist(nextPlan, nextDefaultSaving) {
+    clearTimeout(saveTimer.current);
+    saveTimer.current = setTimeout(async () => {
+      const rows = [{ month: planKey, data: nextPlan, updated_at: new Date().toISOString() }];
+      if (nextDefaultSaving !== undefined) rows.push({ month: "default", data: { saving: nextDefaultSaving }, updated_at: new Date().toISOString() });
+      const { error } = await supabase.from("cashflow_plans").upsert(rows, { onConflict: "user_id,month" });
+      if (error) { console.error("cashflow_plans save:", error); setSaveError("Không lưu được tuỳ chỉnh: " + error.message); }
+      else setSaveError("");
+    }, 600);
+  }
+  function updatePlan(patch, nextDefaultSaving) {
+    setPlan((p) => {
+      const next = { ...p, ...patch };
+      persist(next, nextDefaultSaving);
+      return next;
+    });
+    if (nextDefaultSaving !== undefined) setDefaultSaving(nextDefaultSaving);
+  }
+
+  const accById = useMemo(() => Object.fromEntries(accounts.map((a) => [a.id, a])), [accounts]);
+  const isCredit = (accId) => accById[accId]?.type === "credit";
+
+  const calc = useMemo(() => {
+    const y = today.getFullYear(), m = today.getMonth();
+    const BASES = {
+      prev: { label: `Tháng ${new Date(y, m - 1, 1).getMonth() + 1}`, months: [ymKey(y, m - 1)] },
+      cur: { label: `Tháng ${m + 1}`, months: [ymKey(y, m)], partial: true },
+      avg: { label: "TB 3 tháng", months: [ymKey(y, m - 3), ymKey(y, m - 2), ymKey(y, m - 1)] },
+    };
+    const basis = BASES[plan.basis] ? plan.basis : "prev";
+    const base = BASES[basis];
+    const div = base.months.length;
+    const inBase = (dateStr) => base.months.includes(dateStr.slice(0, 7));
+    const txById = Object.fromEntries(txs.map((t) => [t.id, t]));
+
+    // --- Lương: tổng lương của tháng gần nhất có nhận lương (tìm lùi tối đa 6 tháng)
+    let salaryAuto = 0, salaryNote = "Chưa có khoản lương nào trong 6 tháng gần đây";
+    for (let k = 0; k < 6; k++) {
+      const key = ymKey(y, m - k);
+      const list = txs.filter((t) => t.type === "income" && !t.refundForTxId && isSalaryCat(t.category) && t.date.slice(0, 7) === key);
+      if (list.length) {
+        salaryAuto = list.reduce((s, t) => s + Number(t.amount), 0);
+        const last = list.map((t) => t.date).sort().pop();
+        salaryNote = `Theo lương nhận ngày ${fmtDate(last)}`;
+        break;
+      }
+    }
+
+    // --- Thu nhập khác (không phải lương, không phải hoàn tiền)
+    const otherAuto = txs
+      .filter((t) => t.type === "income" && !t.refundForTxId && !isSalaryCat(t.category) && !isCredit(t.accountId) && inBase(t.date))
+      .reduce((s, t) => s + Number(t.amount), 0) / div;
+
+    // --- Để dành: mặc định đã lưu, nếu chưa có thì lấy số đã chuyển vào TK tích lũy ở tháng cơ sở
+    const savingsAccIds = new Set(accounts.filter((a) => a.type === "savings").map((a) => a.id));
+    const savingFromHistory = txs
+      .filter((t) => t.type === "transfer" && savingsAccIds.has(t.toAccountId) && inBase(t.date))
+      .reduce((s, t) => s + Number(t.amount), 0) / div;
+    const savingAuto = defaultSaving ?? savingFromHistory;
+    const savingNote = defaultSaving != null ? "Mục tiêu hằng tháng đã lưu" : `Theo số đã chuyển vào TK tích lũy, ${base.label.toLowerCase()}`;
+
+    // --- Thẻ tín dụng: dư nợ đến hạn trong tháng kế hoạch + khoản định kỳ trên thẻ sắp ghi trong kỳ
+    const cards = accounts.filter((a) => a.type === "credit" && a.statementDay && a.dueDay).map((acc) => {
+      let cutoff = null;
+      for (let k = -2; k <= 2 && !cutoff; k++) {
+        const c = new Date(y, m + k, acc.statementDay);
+        if (inPlan(dueDateForCutoff(c, acc))) cutoff = c;
+      }
+      const swipedList = txs.filter((t) => t.accountId === acc.id && (t.type === "expense" || t.type === "income") && inPlan(getCashFlowDate(t, acc)));
+      const swiped = swipedList.reduce((s, t) => s + (t.type === "expense" ? 1 : -1) * Number(t.amount), 0);
+      const upcoming = [];
+      recurring.filter((r) => r.isActive && r.accountId === acc.id).forEach((r) => {
+        for (let n = r.doneCount, guard = 0; guard < 60 && (r.cycleCount === 0 || n < r.cycleCount); n++, guard++) {
+          const od = occurrenceDate(r, acc, n);
+          if (toISODate(od) > planEnd) break;
+          if (inPlan(getCashFlowDate({ date: toISODate(od) }, acc))) {
+            upcoming.push({ key: r.id + "-" + n, name: r.name, date: od, amount: Number(r.amount), tag: r.cycleCount > 0 ? `kỳ ${n + 1}/${r.cycleCount}` : null });
+          }
+        }
+      });
+      const upcomingTotal = upcoming.reduce((s, u) => s + u.amount, 0);
+      const periodStart = cutoff ? new Date(cutoff.getFullYear(), cutoff.getMonth() - 1, acc.statementDay) : null;
+      const periodEnd = cutoff ? new Date(cutoff.getFullYear(), cutoff.getMonth(), cutoff.getDate() - 1) : null;
+      const due = cutoff ? dueDateForCutoff(cutoff, acc) : null;
+      return {
+        acc, swiped, swipedCount: swipedList.filter((t) => t.type === "expense").length, upcoming, upcomingTotal,
+        total: Math.max(0, swiped + upcomingTotal), periodStart, periodEnd, due,
+        stillOpen: periodEnd ? toISODate(periodEnd) >= todayStr : false,
+      };
+    }).filter((c) => c.total > 0 || c.upcoming.length);
+
+    // --- Định kỳ ngoài thẻ: các kỳ chưa ghi rơi vào tháng kế hoạch
+    const recs = [];
+    recurring.filter((r) => r.isActive && !isCredit(r.accountId)).forEach((r) => {
+      const acc = accById[r.accountId];
+      const dates = [];
+      for (let n = r.doneCount, guard = 0; guard < 400 && (r.cycleCount === 0 || n < r.cycleCount); n++, guard++) {
+        const od = occurrenceDate(r, acc, n);
+        if (toISODate(od) > planEnd) break;
+        if (toISODate(od) >= planStart) dates.push({ date: od, n });
+      }
+      if (!dates.length) return;
+      const last = dates[dates.length - 1];
+      recs.push({
+        id: r.id, name: r.name, amount: Number(r.amount) * dates.length,
+        sub: `${dates.length > 1 ? dates.length + " lần, " : "Ghi ngày "}${dates.map((d) => fmtDM(d.date)).join(", ")}${acc ? " từ " + acc.name : ""}${r.cycleCount > 0 ? ` · kỳ ${last.n + 1}/${r.cycleCount}` : ""}`,
+      });
+    });
+
+    // --- Chi tiêu theo danh mục ngoài thẻ tín dụng, đã loại khoản định kỳ, đã trừ hoàn tiền
+    const byCat = {};
+    txs.forEach((t) => {
+      if (t.type !== "expense" || t.recurringId || isCredit(t.accountId) || !inBase(t.date)) return;
+      const c = t.category || "Khác";
+      byCat[c] = (byCat[c] || 0) + Number(t.amount);
+    });
+    txs.forEach((t) => {
+      if (t.type !== "income" || !t.refundForTxId || !inBase(t.date)) return;
+      const o = txById[t.refundForTxId];
+      if (!o || o.type !== "expense" || o.recurringId || isCredit(o.accountId)) return;
+      const c = o.category || "Khác";
+      if (byCat[c] != null) byCat[c] = Math.max(0, byCat[c] - Number(t.amount));
+    });
+    const cats = Object.entries(byCat).map(([name, v]) => ({ name, amount: v / div })).filter((c) => c.amount > 0).sort((a, b) => b.amount - a.amount);
+
+    return { BASES, basis, base, salaryAuto, salaryNote, otherAuto, savingAuto, savingNote, cards, recs, cats };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [txs, accounts, recurring, plan.basis, defaultSaving, todayStr]);
+
+  const salary = plan.salary ?? calc.salaryAuto;
+  const other = plan.other ?? calc.otherAuto;
+  const saving = plan.saving ?? calc.savingAuto;
+  const extraIncTotal = plan.extraInc.reduce((s, r) => s + (Number(r.amount) || 0), 0);
+  const extraExpTotal = plan.extraExp.reduce((s, r) => s + (Number(r.amount) || 0), 0);
+  const cardsTotal = calc.cards.reduce((s, c) => s + c.total, 0);
+  const recsTotal = calc.recs.filter((r) => !plan.offRecs[r.id]).reduce((s, r) => s + r.amount, 0);
+  const catsTotal = calc.cats.filter((c) => !plan.offCats[c.name]).reduce((s, c) => s + c.amount, 0);
+  const thu = salary + other + extraIncTotal;
+  const chi = cardsTotal + saving + recsTotal + catsTotal + extraExpTotal;
+  const net = thu - chi;
+  const pct = thu > 0 ? Math.min(100, (chi / thu) * 100) : 100;
+  const planLabel = `${pad(planY.getMonth() + 1)}/${planY.getFullYear()}`;
+
+  function editExtra(kind, id, patch) {
+    updatePlan({ [kind]: plan[kind].map((r) => (r.id === id ? { ...r, ...patch } : r)) });
+  }
+  function addExtra(kind) { updatePlan({ [kind]: [...plan[kind], { id: newRowId(), name: "", amount: "" }] }); }
+  function removeExtra(kind, id) { updatePlan({ [kind]: plan[kind].filter((r) => r.id !== id) }); }
+
+  const extraRows = (kind, placeholder) => plan[kind].map((r) => (
+    <div key={r.id} className="flex items-center gap-2 py-2" style={{ borderBottom: "1px dashed " + COLORS.border }}>
+      <input value={r.name} onChange={(e) => editExtra(kind, r.id, { name: e.target.value })} placeholder={placeholder} style={{ flex: 1, minWidth: 0 }} />
+      <div style={{ width: 120, flexShrink: 0 }}>
+        <AmountInput value={r.amount} onChange={(v) => editExtra(kind, r.id, { amount: v })} align="right" />
+      </div>
+      <button type="button" onClick={() => removeExtra(kind, r.id)} aria-label="Xoá khoản này" className="flex items-center justify-center"
+        style={{ width: 32, height: 32, flexShrink: 0, borderRadius: 8, border: "1px solid " + COLORS.border, color: COLORS.textSecondary }}>
+        <X size={14} />
+      </button>
+    </div>
+  ));
+
+  const addBtn = (label, kind) => (
+    <button type="button" onClick={() => addExtra(kind)} className="sans text-sm w-full mt-2 rounded-lg"
+      style={{ minHeight: 44, border: "1px dashed " + COLORS.border, color: COLORS.cream }}>
+      + {label}
+    </button>
+  );
+
+  if (!loaded) return <p className="sans text-xs" style={{ color: COLORS.textSecondary }}>Đang tải kế hoạch…</p>;
+
+  return (
+    <div className="rounded-xl p-4 space-y-4" style={{ background: COLORS.surface, border: "1px solid " + COLORS.border }}>
+      {/* Tổng quan */}
+      <div>
+        <p className="sans text-xs" style={{ color: COLORS.textSecondary }}>Kế hoạch dòng tiền tháng {planLabel}</p>
+        <p className="mono" style={{ fontSize: 28, fontWeight: 700, color: net >= 0 ? COLORS.accent : COLORS.expense }}>
+          {net >= 0 ? "+" : "−"}{Math.round(Math.abs(net)).toLocaleString("vi-VN")} đ
+        </p>
+        <p className="sans text-xs" style={{ color: COLORS.textSecondary }}>
+          {net >= 0 ? "Dư dự kiến sau khi trả thẻ và để dành" : "Thiếu hụt dự kiến, cần cắt giảm hoặc bớt để dành"}
+        </p>
+      </div>
+      <div>
+        <div style={{ height: 10, borderRadius: 999, background: COLORS.surface2, overflow: "hidden" }}>
+          <div style={{ width: pct.toFixed(1) + "%", height: "100%", background: COLORS.expense }} />
+        </div>
+        <div className="flex justify-between sans mt-1" style={{ fontSize: 11, color: COLORS.textSecondary }}>
+          <span>Chi chiếm {Math.round(pct)}% tổng thu</span>
+          <span>Để dành {thu > 0 ? Math.round((saving / thu) * 100) : 0}% thu nhập</span>
+        </div>
+      </div>
+      <div className="grid grid-cols-2 gap-2">
+        <div className="rounded-lg p-3" style={{ background: COLORS.surface2 }}>
+          <p className="sans" style={{ fontSize: 11, color: COLORS.textSecondary }}>Tổng thu dự kiến</p>
+          <p className="mono text-sm" style={{ color: COLORS.accent, fontWeight: 700 }}>{fmtVND(thu)}</p>
+        </div>
+        <div className="rounded-lg p-3" style={{ background: COLORS.surface2 }}>
+          <p className="sans" style={{ fontSize: 11, color: COLORS.textSecondary }}>Tổng chi dự kiến</p>
+          <p className="mono text-sm" style={{ color: COLORS.expense, fontWeight: 700 }}>{fmtVND(chi)}</p>
+        </div>
+      </div>
+
+      {/* Cơ sở ước tính */}
+      <div>
+        <p className="sans text-xs mb-1.5" style={{ color: COLORS.textSecondary }}>Ước tính chi tiêu và thu khác dựa trên</p>
+        <div className="grid grid-cols-3 gap-1.5">
+          {Object.entries(calc.BASES).map(([k, b]) => (
+            <button key={k} type="button" onClick={() => updatePlan({ basis: k })} className="sans text-xs rounded-lg"
+              style={{ minHeight: 40, fontWeight: 600, border: "1px solid " + (calc.basis === k ? COLORS.cream : COLORS.border), background: calc.basis === k ? COLORS.surface2 : "transparent", color: calc.basis === k ? COLORS.cream : COLORS.textSecondary }}>
+              {b.label}
+            </button>
+          ))}
+        </div>
+        {calc.base.partial && (
+          <p className="sans mt-1.5" style={{ fontSize: 11, color: COLORS.warn }}>Tháng {today.getMonth() + 1} mới qua {today.getDate()} ngày, số ước tính có thể thấp hơn thực tế.</p>
+        )}
+      </div>
+
+      {saveError && <p className="sans" style={{ fontSize: 11, color: COLORS.warn }}>{saveError}</p>}
+
+      <div style={{ height: 1, background: COLORS.border }} />
+
+      {/* THU */}
+      <div>
+        <div className="flex justify-between items-baseline pb-1">
+          <p style={{ fontSize: 17, fontWeight: 600 }}>Thu dự kiến</p>
+          <p className="mono text-xs" style={{ color: COLORS.accent }}>{Math.round(thu).toLocaleString("vi-VN")}</p>
+        </div>
+        <PlanLine name="Lương" sub={plan.salary != null ? "Đã chỉnh tay" : calc.salaryNote}
+          right={<PlanAmountCell value={Math.round(salary)} edited={plan.salary != null} onReset={() => updatePlan({ salary: null })} onChange={(v) => updatePlan({ salary: Number(v) || 0 })} />} />
+        <PlanLine name="Thu nhập khác" sub={plan.other != null ? "Đã chỉnh tay" : `Theo ${calc.base.label.toLowerCase()}`}
+          right={<PlanAmountCell value={Math.round(other)} edited={plan.other != null} onReset={() => updatePlan({ other: null })} onChange={(v) => updatePlan({ other: Number(v) || 0 })} />} />
+        {extraRows("extraInc", "Tên khoản thu")}
+        {addBtn("Thêm khoản thu", "extraInc")}
+      </div>
+
+      <div style={{ height: 1, background: COLORS.border }} />
+
+      {/* CHI */}
+      <div>
+        <div className="flex justify-between items-baseline pb-1">
+          <p style={{ fontSize: 17, fontWeight: 600 }}>Chi dự kiến</p>
+          <p className="mono text-xs" style={{ color: COLORS.expense }}>{Math.round(chi).toLocaleString("vi-VN")}</p>
+        </div>
+
+        {calc.cards.length > 0 && <PlanGroupTitle>Thanh toán thẻ tín dụng</PlanGroupTitle>}
+        {calc.cards.map((c) => {
+          const open = !!visaOpen[c.acc.id];
+          return (
+            <div key={c.acc.id} style={{ borderBottom: "1px dashed " + COLORS.border }}>
+              <button type="button" onClick={() => setVisaOpen((s) => ({ ...s, [c.acc.id]: !open }))} className="w-full text-left flex items-center gap-2 py-2.5" style={{ minHeight: 44 }}>
+                <div className="flex-1 min-w-0">
+                  <p className="sans text-sm" style={{ color: COLORS.textPrimary }}>{c.acc.name}</p>
+                  {c.periodStart && <p className="sans" style={{ fontSize: 11, color: COLORS.textSecondary }}>Kỳ sao kê {fmtDM(c.periodStart)} – {fmtDM(c.periodEnd)}, hạn thanh toán {fmtDM(c.due)}</p>}
+                  <p className="sans" style={{ fontSize: 11, color: COLORS.textSecondary }}>
+                    Đã quẹt {Math.round(c.swiped).toLocaleString("vi-VN")}{c.upcoming.length > 0 && ` + định kỳ sắp ghi ${Math.round(c.upcomingTotal).toLocaleString("vi-VN")}`}
+                  </p>
+                </div>
+                <span className="mono text-sm" style={{ color: COLORS.textPrimary }}>{Math.round(c.total).toLocaleString("vi-VN")}</span>
+                <ChevronRight size={16} style={{ color: COLORS.textSecondary, transform: open ? "rotate(90deg)" : "none", transition: "transform .2s", flexShrink: 0 }} />
+              </button>
+              {open && (
+                <div className="rounded-lg p-3 mb-3 space-y-2 sans text-xs" style={{ background: COLORS.surface2 }}>
+                  <div className="flex justify-between gap-2">
+                    <span>Đã quẹt trong kỳ<br /><span style={{ fontSize: 11, color: COLORS.textSecondary }}>{c.swipedCount} giao dịch, đã trừ hoàn tiền</span></span>
+                    <span className="mono">{Math.round(c.swiped).toLocaleString("vi-VN")}</span>
+                  </div>
+                  {c.upcoming.length > 0 && <p style={{ color: COLORS.textSecondary, fontWeight: 600 }}>Định kỳ sắp ghi trước ngày chốt{c.periodEnd ? " " + fmtDM(c.periodEnd) : ""}</p>}
+                  {c.upcoming.map((u) => (
+                    <div key={u.key} className="flex justify-between gap-2">
+                      <span>{u.name}{u.tag && <span style={{ fontSize: 10, marginLeft: 6, padding: "1px 6px", borderRadius: 999, border: "1px solid " + COLORS.border, color: COLORS.textSecondary }}>{u.tag}</span>}<br /><span style={{ fontSize: 11, color: COLORS.textSecondary }}>Ghi ngày {fmtDM(u.date)}</span></span>
+                      <span className="mono">{Math.round(u.amount).toLocaleString("vi-VN")}</span>
+                    </div>
+                  ))}
+                  <div className="flex justify-between gap-2 pt-2" style={{ borderTop: "1px solid " + COLORS.border, fontWeight: 700 }}>
+                    <span>Dự kiến phải trả{c.due ? " " + fmtDM(c.due) : ""}</span>
+                    <span className="mono">{Math.round(c.total).toLocaleString("vi-VN")}</span>
+                  </div>
+                  {c.stillOpen && <p style={{ fontSize: 11, color: COLORS.warn }}>Còn tăng nếu quẹt thêm từ nay đến {fmtDM(c.periodEnd)}.</p>}
+                </div>
+              )}
+            </div>
+          );
+        })}
+
+        <PlanGroupTitle>Để dành</PlanGroupTitle>
+        <PlanLine name="Chuyển vào TK tích lũy" sub={plan.saving != null ? "Đã chỉnh tay, dùng làm mặc định cho các tháng sau" : calc.savingNote}
+          right={<PlanAmountCell value={Math.round(saving)} edited={plan.saving != null} onReset={() => updatePlan({ saving: null })} onChange={(v) => { const n = Number(v) || 0; updatePlan({ saving: n }, n); }} />} />
+
+        {calc.recs.length > 0 && <PlanGroupTitle>Định kỳ (ngoài thẻ tín dụng)</PlanGroupTitle>}
+        {calc.recs.map((r) => {
+          const on = !plan.offRecs[r.id];
+          return (
+            <label key={r.id} className="block">
+              <PlanLine name={r.name} sub={r.sub} amount={r.amount} muted={!on} strike={!on}>
+                <input type="checkbox" checked={on} onChange={() => updatePlan({ offRecs: { ...plan.offRecs, [r.id]: on } })} style={{ width: 18, height: 18, accentColor: COLORS.accent, flexShrink: 0 }} />
+              </PlanLine>
+            </label>
+          );
+        })}
+
+        <PlanGroupTitle>Chi tiêu dự kiến (ngoài thẻ tín dụng)</PlanGroupTitle>
+        {calc.cats.length === 0 && <p className="sans text-xs py-2" style={{ color: COLORS.textSecondary }}>Không có chi tiêu ngoài thẻ trong {calc.base.label.toLowerCase()}.</p>}
+        {calc.cats.map((c) => {
+          const on = !plan.offCats[c.name];
+          return (
+            <label key={c.name} className="block">
+              <PlanLine name={c.name} sub={on ? `Theo ${calc.base.label.toLowerCase()}` : "Không tính vào kế hoạch"} amount={c.amount} muted={!on} strike={!on}>
+                <input type="checkbox" checked={on} onChange={() => updatePlan({ offCats: { ...plan.offCats, [c.name]: on } })} style={{ width: 18, height: 18, accentColor: COLORS.accent, flexShrink: 0 }} />
+              </PlanLine>
+            </label>
+          );
+        })}
+        {extraRows("extraExp", "Tên khoản chi")}
+        {addBtn("Thêm khoản chi dự kiến", "extraExp")}
+        <p className="sans pt-2" style={{ fontSize: 11, color: COLORS.textSecondary, lineHeight: 1.5 }}>
+          Khoản quẹt thẻ trong tháng {planY.getMonth() + 1} sẽ nằm trong hoá đơn trả ở tháng sau nữa, nên không tính ở đây.
+        </p>
+      </div>
+
+      <button type="button" onClick={() => updatePlan({ ...PLAN_EMPTY, basis: plan.basis })} className="sans text-sm w-full rounded-lg"
+        style={{ minHeight: 44, border: "1px solid " + COLORS.border, color: COLORS.textSecondary }}>
+        Khôi phục số tự động
+      </button>
+    </div>
+  );
+}
+
 export default function App() {
   const [session, setSession] = useState(null);
   const [checkingAuth, setCheckingAuth] = useState(true);
@@ -2741,6 +3148,7 @@ const periodExpense = periodTxs.filter((t) => t.type === "expense").reduce((s, t
             { v: "tonghop", l: "Tổng hợp tháng" },
             { v: "doichieu", l: "Đối chiếu sao kê" },
             { v: "xuhuong", l: "Xu hướng" },
+            { v: "kehoach", l: "Kế hoạch tháng sau" },
           ].map((o) => <Chip key={o.v} label={o.l} active={reportView === o.v} onClick={() => setReportView(o.v)} />)}
         </div>
         
@@ -2959,6 +3367,10 @@ const periodExpense = periodTxs.filter((t) => t.type === "expense").reduce((s, t
               })}
             </div>
           )}
+
+{reportView === "kehoach" && (
+  <CashflowPlanCard txs={txs} accounts={accounts} recurring={recurring} />
+)}
 
 {reportView === "xuhuong" && (
   <div className="space-y-4">
