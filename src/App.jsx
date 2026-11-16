@@ -113,6 +113,7 @@ function recFromDb(row) {
     principal: row.principal || 0,
     isInstallment: row.is_installment || false,
     isActive: row.is_active ?? true,        // ← thêm dòng này
+    splitLines: Array.isArray(row.split_lines) && row.split_lines.length >= 2 ? row.split_lines : null,
   };
 }
 function recToDb(r) {
@@ -130,6 +131,9 @@ function recToDb(r) {
     principal: r.principal ? Number(r.principal) : null,
     is_installment: r.isInstallment || false,
     is_active: r.isActive ?? true,           // ← thêm dòng này
+    split_lines: r.splitLines && r.splitLines.length >= 2
+      ? r.splitLines.map((l) => ({ category: l.category, member: l.member || null, amount: Number(l.amount) }))
+      : null,
   };
 }
 
@@ -945,7 +949,7 @@ function RecurringItemCard({ r, acc, done, pending, txList, unitLabel, onEdit, o
               {!inactive && pending && <span style={{ color: COLORS.expense, fontSize: 11 }}> · Đến hạn</span>}
             </p>
             <p className="sans text-xs" style={{ color: COLORS.textMuted }}>
-              {r.category} · mỗi {r.repeatValue} {unitLabel(r.repeatUnit)}/lần · từ {fmtDate(r.startDate)} · {r.cycleCount > 0 ? `${r.doneCount}/${r.cycleCount} chu kỳ` : `đã ghi ${r.doneCount} lần, không giới hạn`}
+              {r.splitLines ? `Gộp ${r.splitLines.length} khoản: ${r.splitLines.map((l) => l.category).join(", ")}` : r.category} · mỗi {r.repeatValue} {unitLabel(r.repeatUnit)}/lần · từ {fmtDate(r.startDate)} · {r.cycleCount > 0 ? `${r.doneCount}/${r.cycleCount} chu kỳ` : `đã ghi ${r.doneCount} lần, không giới hạn`}
             </p>
           </div>
         </div>
@@ -985,13 +989,18 @@ function RecurringItemCard({ r, acc, done, pending, txList, unitLabel, onEdit, o
   );
 }
 
+function groupTitle(group) {
+  return group.vendor || group.note || (group.type === "income" ? "Khoản thu gộp" : "Hóa đơn gộp");
+}
+
 function AccountGroupRow({ group, onEditTx, onEditGroup, refundMap }) {  const [open, setOpen] = useState(false);
   const total = group.items.reduce((s, t) => s + t.amount, 0);
+  const isIncome = group.type === "income";
   return (
     <div>
       <div className="flex justify-between sans text-xs" style={{ color: COLORS.textMuted, cursor: "pointer" }} onClick={(e) => { e.stopPropagation(); setOpen(!open); }}>
-        <span>{fmtDate(group.items[0].date)} · {group.vendor || group.note || "Hóa đơn gộp"} <span style={{ fontSize: 10 }}>· {group.items.length} khoản</span></span>
-        <span className="mono" style={{ color: COLORS.expense }}>-{fmtVND(total)}</span>
+        <span>{fmtDate(group.items[0].date)} · {groupTitle(group)} <span style={{ fontSize: 10 }}>· {group.items.length} khoản</span></span>
+        <span className="mono" style={{ color: isIncome ? COLORS.accent : COLORS.expense }}>{isIncome ? "+" : "-"}{fmtVND(total)}</span>
       </div>
             {open && (
         <div className="mt-1 space-y-1" style={{ paddingLeft: 10, borderLeft: "2px solid " + COLORS.border }}>
@@ -1000,7 +1009,9 @@ function AccountGroupRow({ group, onEditTx, onEditGroup, refundMap }) {  const [
             return (
               <div key={t.id}>
                 <div className="flex justify-between sans text-xs" style={{ color: COLORS.textSecondary, cursor: "pointer" }} onClick={(e) => { e.stopPropagation(); onEditTx && onEditTx(t); }}>
-                  <span style={{ display: "flex", alignItems: "center", gap: 6 }}>{t.member || "Chưa gán thành viên"}{t.note ? ` · ${t.note}` : ""} <RefundBadge info={info} onEditTx={onEditTx} /></span>
+                  <span style={{ display: "flex", alignItems: "center", gap: 6 }}>{group.refundLabels?.[t.id]
+                    ? <span><span style={{ color: COLORS.accent }}>Hoàn tiền</span> · cho {group.refundLabels[t.id]}</span>
+                    : <>{t.member || "Chưa gán thành viên"}{t.note ? ` · ${t.note}` : ""}</>} <RefundBadge info={info} onEditTx={onEditTx} /></span>
                   <span className="mono" style={{ color: COLORS.cream, textDecoration: info?.isFull ? "line-through" : "none" }}>{fmtVND(t.amount)}</span>
                 </div>
                 <RefundInline info={info} onEditTx={onEditTx} />
@@ -1018,10 +1029,15 @@ function AccountReportCard({ account, data, balance, txList, onEditTx, onEditGro
   return (
     <div className="rounded-lg p-3" style={{ background: COLORS.surface, border: "1px solid " + COLORS.border, cursor: "pointer" }} onClick={() => setOpen(!open)}>
       <div className="flex items-center gap-2 mb-2"><AccIcon type={account.type} size={15} color={COLORS.cream} /><span className="sans text-sm">{account.name}</span></div>
-      <div className="sans text-xs" style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr" }}>
-        <span style={{ color: COLORS.accent, textAlign: "left" }}>Thu: {fmtVND(data.income)}</span>
-        <span style={{ color: COLORS.expense, textAlign: "center" }}>Chi: {fmtVND(data.expense)}</span>
-        <span className="mono" style={{ color: COLORS.cream, textAlign: "right" }}>Số dư: {fmtVND(balance)}</span>
+      <div className="sans text-xs" style={{ display: "grid", gridTemplateColumns: "1fr auto", columnGap: 12, alignItems: "end" }}>
+        <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+          <span style={{ color: COLORS.accent }}>Thu: {fmtVND(data.income)}</span>
+          <span style={{ color: COLORS.expense }}>Chi: {fmtVND(data.expense)}</span>
+        </div>
+        <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 2 }}>
+          <span style={{ color: COLORS.textMuted }}>Số dư:</span>
+          <span className="mono" style={{ color: balance < 0 ? COLORS.expense : COLORS.cream, fontSize: 15, fontWeight: 700 }}>{fmtVND(balance)}</span>
+        </div>
       </div>
       {open && (
         <div className="mt-2 pt-2 space-y-1" style={{ borderTop: "1px dashed " + COLORS.border }} onClick={(e) => e.stopPropagation()}>
@@ -1286,6 +1302,7 @@ function BudgetPaceView({ budgets, currentMonthExpenseByCat, lastMonthExpenseByC
 function SplitGroupRow({ group, onEditTx, onEditGroup, refundMap }) {
   const [open, setOpen] = useState(false);
   const total = group.items.reduce((s, t) => s + t.amount, 0);
+  const isIncome = group.type === "income";
   return (
     <div className="ledger-line" style={{ cursor: "pointer" }}>
       <div className="py-3 flex items-center justify-between" style={{ gap: 12 }} onClick={() => setOpen(!open)}>
@@ -1293,7 +1310,7 @@ function SplitGroupRow({ group, onEditTx, onEditGroup, refundMap }) {
           <div style={{ color: COLORS.textMuted, flexShrink: 0 }}><AccIcon type={group.accType} /></div>
           <div style={{ minWidth: 0 }}>
             <p className="sans text-sm" style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-              {group.vendor || group.note || "Hóa đơn gộp"} <span style={{ color: COLORS.textMuted, fontSize: 11 }}>· {group.items.length} khoản</span>
+              {groupTitle(group)} <span style={{ color: COLORS.textMuted, fontSize: 11 }}>· {group.items.length} khoản</span>
             </p>
             <p className="sans text-xs" style={{ color: COLORS.textMuted, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
               {group.items.map((t) => t.category).join(", ")}
@@ -1301,7 +1318,7 @@ function SplitGroupRow({ group, onEditTx, onEditGroup, refundMap }) {
           </div>
         </div>
         <div className="flex flex-col items-end gap-1" style={{ flexShrink: 0 }}>
-          <span className="mono text-sm" style={{ color: COLORS.expense }}>-{fmtVND(total)}</span>
+          <span className="mono text-sm" style={{ color: isIncome ? COLORS.accent : COLORS.expense }}>{isIncome ? "+" : "-"}{fmtVND(total)}</span>
           <span className="sans text-xs" style={{ color: COLORS.textMuted }}>{group.accName}</span>
         </div>
       </div>
@@ -1312,7 +1329,9 @@ function SplitGroupRow({ group, onEditTx, onEditGroup, refundMap }) {
             return (
               <div key={t.id}>
                 <div className="flex justify-between sans text-xs" style={{ color: COLORS.textMuted, cursor: "pointer" }} onClick={(e) => { e.stopPropagation(); onEditTx && onEditTx(t); }}>
-                  <span style={{ display: "flex", alignItems: "center", gap: 6 }}>{t.member || "Chưa gán thành viên"}{t.note ? " · " + t.note : ""} <RefundBadge info={info} onEditTx={onEditTx} /></span>
+                  <span style={{ display: "flex", alignItems: "center", gap: 6 }}>{group.refundLabels?.[t.id]
+                    ? <span><span style={{ color: COLORS.accent }}>Hoàn tiền</span> · cho {group.refundLabels[t.id]}</span>
+                    : <>{t.member || "Chưa gán thành viên"}{t.note ? " · " + t.note : ""}</>} <RefundBadge info={info} onEditTx={onEditTx} /></span>
                   <span className="mono" style={{ textDecoration: info?.isFull ? "line-through" : "none" }}>{fmtVND(t.amount)}</span>
                 </div>
                 <RefundInline info={info} onEditTx={onEditTx} />
@@ -1795,6 +1814,41 @@ export default function App() {
   }
     const accById = (id) => accounts.find((a) => a.id === id);
 
+  // Nhãn "cho <giao dịch gốc>" của các khoản hoàn tiền nằm trong nhóm gộp
+  function refundLabelsFor(items) {
+    const out = {};
+    items.forEach((t) => {
+      if (t.type !== "income" || !t.refundForTxId) return;
+      const o = txs.find((x) => x.id === t.refundForTxId);
+      out[t.id] = o ? `${o.note || o.vendor || o.category} (${fmtDate(o.date)})` : "giao dịch đã xóa";
+    });
+    return out;
+  }
+
+  // Ứng viên giao dịch chi để gắn hoàn tiền (dùng cho từng khoản trong nhóm gộp)
+  function findRefundCandidates(query) {
+    const q = (query || "").trim().toLowerCase();
+    if (!q) return [];
+    const qDigits = q.replace(/[^\d]/g, "");
+    return txs
+      .filter((t) => t.type === "expense")
+      .filter((t) => {
+        const matchAmount = qDigits && String(t.amount).includes(qDigits);
+        const matchText = [t.note, t.category, t.vendor, t.member].some((f) => (f || "").toLowerCase().includes(q));
+        return matchText || matchAmount;
+      })
+      .sort((a, b) => (a.date < b.date ? 1 : -1))
+      .slice(0, 8);
+  }
+
+  // Số còn hoàn được của 1 giao dịch chi (không tính các khoản của nhóm đang sửa)
+  function refundableLeft(orig) {
+    const already = txs
+      .filter((t) => t.type === "income" && t.refundForTxId === orig.id && !originalSplitIds.includes(t.id))
+      .reduce((s, t) => s + t.amount, 0);
+    return Math.max(0, orig.amount - already);
+  }
+
   function groupSplitTxs(list) {
     const seen = new Map();
     const merged = [];
@@ -1804,11 +1858,12 @@ export default function App() {
         seen.get(t.splitGroupId).items.push(t);
       } else {
         const acc = accById(t.accountId);
-        const g = { isGroup: true, id: t.splitGroupId, accountId: t.accountId, accName: acc?.name, accType: acc?.type, vendor: t.vendor, note: t.note, items: [t] };
+        const g = { isGroup: true, id: t.splitGroupId, type: t.type, accountId: t.accountId, accName: acc?.name, accType: acc?.type, vendor: t.vendor, note: t.note, items: [t] };
         seen.set(t.splitGroupId, g);
         merged.push(g);
       }
     });
+    merged.forEach((g) => { if (g.isGroup) g.refundLabels = refundLabelsFor(g.items); });
     return merged;
   }
 
@@ -1825,7 +1880,7 @@ export default function App() {
   const [newCatName, setNewCatName] = useState("");
   const [newVendorName, setNewVendorName] = useState("");
   const [newMemberName, setNewMemberName] = useState("");
-  const [newRecurring, setNewRecurring] = useState({ name: "", amount: "", category: "", member: "", accountId: "", startDate: todayISO(), repeatValue: 1, repeatUnit: "month", cycleCount: "", principal: "", isInstallment: false });
+  const [newRecurring, setNewRecurring] = useState({ name: "", amount: "", category: "", member: "", accountId: "", startDate: todayISO(), repeatValue: 1, repeatUnit: "month", cycleCount: "", principal: "", isInstallment: false, isSplit: false, splitLines: [] });
   const [editingRecurringId, setEditingRecurringId] = useState(null);
   const [newBudget, setNewBudget] = useState({ category: "", limit: "" });
   
@@ -1921,14 +1976,35 @@ useEffect(() => {
 
     async function saveTx() {
   if (!form.amount || Number(form.amount) <= 0) return;
+  const groupWord = entryType === "income" ? "khoản thu gộp" : "hóa đơn gộp";
+  const isRefundLine = (l) => entryType === "income" && !!l.refund;
+  const splitLinesValid = () => splitLines.every((l) => Number(l.amount) > 0 && (isRefundLine(l) ? l.refundForTxId : l.category));
+  const splitRefundError = () => {
+    const pending = {};
+    splitLines.filter(isRefundLine).forEach((l) => { pending[l.refundForTxId] = (pending[l.refundForTxId] || 0) + Number(l.amount); });
+    for (const [origId, amt] of Object.entries(pending)) {
+      const orig = txs.find((t) => t.id === origId);
+      if (!orig) return "Không tìm thấy giao dịch gốc của khoản hoàn tiền";
+      if (amt > refundableLeft(orig)) return `Số hoàn vượt số còn hoàn được của "${orig.note || orig.vendor || orig.category}"`;
+    }
+    return null;
+  };
 
-  if (entryType === "expense" && isSplitEntry && editingGroupId) {
+  if (entryType !== "transfer" && isSplitEntry && editingGroupId) {
     const splitSum = splitLines.reduce((s, l) => s + (Number(l.amount) || 0), 0);
-    const valid = splitSum === Number(form.amount) && splitLines.every((l) => Number(l.amount) > 0 && l.category);
-    if (!valid) { showToast("Tổng các khoản phải khớp với tổng hóa đơn"); return; }
+    if (splitSum !== Number(form.amount)) { showToast("Tổng các khoản phải khớp với tổng số tiền"); return; }
+    if (!splitLinesValid()) { showToast("Mỗi khoản cần số tiền và danh mục (hoặc giao dịch được hoàn)"); return; }
+    const refundErr = splitRefundError();
+    if (refundErr) { showToast(refundErr); return; }
 
     const keptIds = splitLines.map((l) => l.id).filter((id) => originalSplitIds.includes(id));
     const removedIds = originalSplitIds.filter((id) => !keptIds.includes(id));
+    const originalItems = txs.filter((t) => originalSplitIds.includes(t.id));
+    // Giữ liên kết với khoản định kỳ (nếu nhóm này sinh ra từ khoản định kỳ gộp)
+    const groupRecurringId = originalItems.find((t) => t.recurringId)?.recurringId || null;
+    if (originalItems.some((t) => removedIds.includes(t.id) && t.recurringId && t.occurrenceIndex != null)) {
+      showToast("Không xóa được khoản gốc của kỳ định kỳ"); return;
+    }
     const newLines = splitLines.filter((l) => !originalSplitIds.includes(l.id));
     const updatedLines = splitLines.filter((l) => originalSplitIds.includes(l.id));
 
@@ -1940,9 +2016,9 @@ useEffect(() => {
     let updatedRows = [];
     for (const l of updatedLines) {
       const payload = txToDb({
-        type: "expense", date: form.date, amount: Number(l.amount), category: l.category,
+        type: entryType, date: form.date, amount: Number(l.amount), category: isRefundLine(l) ? "Hoàn tiền" : l.category, refundForTxId: isRefundLine(l) ? l.refundForTxId : null,
         member: l.member, accountId: form.accountId, vendor: form.vendor, note: l.note || form.note,
-        splitGroupId: editingGroupId,
+        splitGroupId: editingGroupId, recurringId: groupRecurringId,
       });
       const { data, error } = await supabase.from("transactions").update(payload).eq("id", l.id).select().single();
       if (error) { console.error(error); showToast("Không cập nhật được 1 khoản"); return; }
@@ -1952,9 +2028,9 @@ useEffect(() => {
     let insertedRows = [];
     if (newLines.length) {
       const payloads = newLines.map((l) => txToDb({
-        type: "expense", date: form.date, amount: Number(l.amount), category: l.category,
+        type: entryType, date: form.date, amount: Number(l.amount), category: isRefundLine(l) ? "Hoàn tiền" : l.category, refundForTxId: isRefundLine(l) ? l.refundForTxId : null,
         member: l.member, accountId: form.accountId, vendor: form.vendor, note: l.note || form.note,
-        splitGroupId: editingGroupId,
+        splitGroupId: editingGroupId, recurringId: groupRecurringId,
       }));
       const { data, error } = await supabase.from("transactions").insert(payloads).select();
       if (error) { console.error(error); showToast("Không thêm được khoản mới"); return; }
@@ -1966,27 +2042,29 @@ useEffect(() => {
       return [...insertedRows.map(txFromDb), ...updatedRows.map(txFromDb), ...withoutOld];
     });
     resetEntryForm();
-    showToast("Đã cập nhật hóa đơn gộp");
+    showToast(`Đã cập nhật ${groupWord}`);
     setEntryOpen(false);
     return;
   }
 
-  if (entryType === "expense" && isSplitEntry && !editingId && !editingGroupId) {
+  if (entryType !== "transfer" && isSplitEntry && !editingId && !editingGroupId) {
     const splitSum = splitLines.reduce((s, l) => s + (Number(l.amount) || 0), 0);
-    const valid = splitSum === Number(form.amount) && splitLines.every((l) => Number(l.amount) > 0 && l.category);
-    if (!valid) { showToast("Tổng các khoản phải khớp với tổng hóa đơn"); return; }
+    if (splitSum !== Number(form.amount)) { showToast("Tổng các khoản phải khớp với tổng số tiền"); return; }
+    if (!splitLinesValid()) { showToast("Mỗi khoản cần số tiền và danh mục (hoặc giao dịch được hoàn)"); return; }
+    const refundErr = splitRefundError();
+    if (refundErr) { showToast(refundErr); return; }
 
     const groupId = crypto.randomUUID();
     const payloads = splitLines.map((l) => txToDb({
-      type: "expense", date: form.date, amount: Number(l.amount), category: l.category,
+      type: entryType, date: form.date, amount: Number(l.amount), category: isRefundLine(l) ? "Hoàn tiền" : l.category, refundForTxId: isRefundLine(l) ? l.refundForTxId : null,
       member: l.member, accountId: form.accountId, vendor: form.vendor, note: l.note || form.note,
       splitGroupId: groupId,
     }));
     const { data, error } = await supabase.from("transactions").insert(payloads).select();
-    if (error) { console.error(error); showToast("Không lưu được hóa đơn gộp"); return; }
+    if (error) { console.error(error); showToast(`Không lưu được ${groupWord}`); return; }
     setTxs((prev) => [...data.map(txFromDb), ...prev]);
     resetEntryForm();
-    showToast(`Đã lưu hóa đơn gộp (${payloads.length} khoản)`);
+    showToast(`Đã lưu ${groupWord} (${payloads.length} khoản)`);
     setEntryOpen(false);
     return;
   }
@@ -2018,10 +2096,22 @@ useEffect(() => {
 
     async function removeTx(id) {
     const target = txs.find((t) => t.id === id);
-    const { error } = await supabase.from("transactions").delete().eq("id", id);
+    if (!target) return;
+    // Khoản gốc của 1 kỳ định kỳ gộp (có occurrence_index): xoá nó thì phải xoá cả kỳ,
+    // nếu không các khoản con sẽ mồ côi khi kỳ đó được ghi nhận lại.
+    const isRecurringAnchor = !!(target.recurringId && target.occurrenceIndex != null);
+    const siblings = isRecurringAnchor && target.splitGroupId
+      ? txs.filter((t) => t.splitGroupId === target.splitGroupId && t.id !== id)
+      : [];
+    if (siblings.length && !window.confirm(`Đây là khoản gốc của một kỳ định kỳ gộp. Xóa sẽ xóa cả ${siblings.length + 1} khoản của kỳ này. Tiếp tục?`)) return;
+    const ids = [id, ...siblings.map((s) => s.id)];
+
+    const { error } = await supabase.from("transactions").delete().in("id", ids);
     if (error) { console.error(error); return; }
-    setTxs(txs.filter((t) => t.id !== id));
-    if (target?.recurringId) {
+    setTxs(txs.filter((t) => !ids.includes(t.id)));
+    // Khoản con của kỳ định kỳ gộp (không có occurrence_index) không ảnh hưởng done_count
+    const isRecurringSplitChild = !!(target.recurringId && target.splitGroupId && target.occurrenceIndex == null);
+    if (target.recurringId && !isRecurringSplitChild) {
       const r = recurring.find((x) => x.id === target.recurringId);
       // Chỉ lùi done_count khi xoá đúng kỳ cuối cùng. Xoá một kỳ ở giữa mà vẫn lùi
       // sẽ làm lần ghi tiếp theo trùng occurrence_index với kỳ còn tồn tại → bị DB từ chối mãi.
@@ -2032,7 +2122,7 @@ useEffect(() => {
         if (!rErr) setRecurring((prev) => prev.map((x) => x.id === r.id ? { ...x, doneCount: newDoneCount } : x));
       }
     }
-    showToast("Đã xóa giao dịch");
+    showToast(ids.length > 1 ? `Đã xóa ${ids.length} khoản` : "Đã xóa giao dịch");
   }
 
   function showToast(msg) {
@@ -2058,7 +2148,7 @@ useEffect(() => {
     setEditingId(null);
     setEditingGroupId(group.id);
     setOriginalSplitIds(group.items.map((t) => t.id));
-    setEntryType("expense");
+    setEntryType(group.type || group.items[0]?.type || "expense");
     setIsSplitEntry(true);
     setForm({
       date: group.items[0].date, amount: String(total), category: "", member: "",
@@ -2067,8 +2157,20 @@ useEffect(() => {
     });
     setSplitLines(group.items.map((t) => ({
       id: t.id, category: t.category || "", member: t.member || "", amount: String(t.amount), note: t.note || "",
+      locked: !!(t.recurringId && t.occurrenceIndex != null),
+      refund: !!t.refundForTxId, refundForTxId: t.refundForTxId || null, refundQuery: "",
     })));
     setEntryOpen(true);
+  }
+
+  function switchEntryType(v) {
+    setEntryType(v);
+    if (v === "transfer") { setIsSplitEntry(false); return; }
+    const cats = v === "income" ? incomeCats : expenseCats;
+    setSplitLines((ls) => ls.map((l) => {
+      const base = v === "income" ? l : { ...l, refund: false, refundForTxId: null, refundQuery: "" };
+      return cats.includes(base.category) ? base : { ...base, category: cats[0] || "" };
+    }));
   }
 
   function resetEntryForm() {
@@ -2175,12 +2277,23 @@ async function renameMember(oldName) {
     if (error) { console.error(error); return; }
     await supabase.from("transactions").update({ category: name }).eq("category", oldName).eq("type", type);
     await supabase.from("recurring_items").update({ category: name }).eq("category", oldName);
+    const renamedSplits = type === "expense"
+      ? recurring.filter((r) => r.splitLines?.some((l) => l.category === oldName))
+          .map((r) => ({ id: r.id, lines: r.splitLines.map((l) => (l.category === oldName ? { ...l, category: name } : l)) }))
+      : [];
+    for (const x of renamedSplits) {
+      await supabase.from("recurring_items").update({ split_lines: x.lines }).eq("id", x.id);
+    }
     await supabase.from("budgets").update({ category: name }).eq("category", oldName);
 
     if (type === "income") setIncomeCats(incomeCats.map((c) => (c === oldName ? name : c)));
     else setExpenseCats(expenseCats.map((c) => (c === oldName ? name : c)));
     setTxs(txs.map((t) => (t.category === oldName && t.type === type ? { ...t, category: name } : t)));
-    setRecurring(recurring.map((r) => (r.category === oldName ? { ...r, category: name } : r)));
+    setRecurring(recurring.map((r) => {
+      const next = r.category === oldName ? { ...r, category: name } : r;
+      const hit = renamedSplits.find((x) => x.id === r.id);
+      return hit ? { ...next, splitLines: hit.lines } : next;
+    }));
     setBudgets(budgets.map((b) => (b.category === oldName ? { ...b, category: name } : b)));
     showToast("Đã cập nhật danh mục");
   }
@@ -2274,9 +2387,41 @@ function startEditAccount(a) {
   setAccounts(accounts.map((a) => a.id === id ? { ...a, includeNetWorth: !a.includeNetWorth } : a));
   }
 
+function toggleRecurringSplit(on) {
+  setNewRecurring((r) => ({
+    ...r,
+    isSplit: on,
+    splitLines: on && r.splitLines.length === 0
+      ? [
+          { id: "r0" + Date.now(), category: r.category || expenseCats[0] || "", member: r.member || members[0] || "", amount: r.amount || "" },
+          { id: "r1" + Date.now(), category: expenseCats[0] || "", member: members[0] || "", amount: "" },
+        ]
+      : r.splitLines,
+  }));
+}
+
+function updateRecurringLine(lineId, patch) {
+  setNewRecurring((r) => ({ ...r, splitLines: r.splitLines.map((l) => (l.id === lineId ? { ...l, ...patch } : l)) }));
+}
+
 async function saveRecurring() {
 if (!newRecurring.name.trim() || !newRecurring.amount) return;
-const payload = recToDb({ ...newRecurring, amount: Number(newRecurring.amount), repeatValue: Number(newRecurring.repeatValue) || 1 });
+let splitPayload = null;
+if (newRecurring.isSplit) {
+  const lines = newRecurring.splitLines;
+  const sum = lines.reduce((s, l) => s + (Number(l.amount) || 0), 0);
+  const valid = lines.length >= 2 && sum === Number(newRecurring.amount) && lines.every((l) => Number(l.amount) > 0 && l.category);
+  if (!valid) { showToast("Khoản gộp cần ít nhất 2 khoản, tổng bằng số tiền mỗi lần"); return; }
+  splitPayload = lines.map((l) => ({ category: l.category, member: l.member || "", amount: Number(l.amount) }));
+}
+const payload = recToDb({
+  ...newRecurring,
+  category: splitPayload ? splitPayload[0].category : newRecurring.category,
+  member: splitPayload ? splitPayload[0].member : newRecurring.member,
+  splitLines: splitPayload,
+  amount: Number(newRecurring.amount),
+  repeatValue: Number(newRecurring.repeatValue) || 1,
+});
 if (editingRecurringId) {
   const { data, error } = await supabase.from("recurring_items").update(payload).eq("id", editingRecurringId).select().single();
   if (error) { console.error(error); return; }
@@ -2293,7 +2438,7 @@ if (editingRecurringId) {
   showToast("Đã thêm khoản định kỳ");
 }
 setEditingRecurringId(null);
-setNewRecurring({ name: "", amount: "", category: expenseCats[0] || "", member: members[0] || "", accountId: accounts[0]?.id || "", startDate: todayISO(), repeatValue: 1, repeatUnit: "month", cycleCount: "", principal: "", isInstallment: false });
+setNewRecurring({ name: "", amount: "", category: expenseCats[0] || "", member: members[0] || "", accountId: accounts[0]?.id || "", startDate: todayISO(), repeatValue: 1, repeatUnit: "month", cycleCount: "", principal: "", isInstallment: false, isSplit: false, splitLines: [] });
 }
 
 function startEditRecurring(r) {
@@ -2310,6 +2455,8 @@ function startEditRecurring(r) {
     cycleCount: r.cycleCount ? String(r.cycleCount) : "",
     principal: r.principal ? String(r.principal) : "",
     isInstallment: r.isInstallment,
+    isSplit: !!r.splitLines,
+    splitLines: (r.splitLines || []).map((l, i) => ({ id: "r" + i + Date.now(), category: l.category, member: l.member || "", amount: String(l.amount) })),
   });
   setTab("caidat");
   setTimeout(() => document.getElementById("add-recurring-section")?.scrollIntoView({ behavior: "smooth" }), 100);
@@ -2335,7 +2482,17 @@ async function toggleRecurringActive(r) {
   const date = dateOverride || todayISO();
   const occurrenceIndex = occurrenceIndexOverride ?? r.doneCount;
 
-  const { data, error } = await supabase.rpc("log_recurring_occurrence", {
+  const isSplit = Array.isArray(r.splitLines) && r.splitLines.length >= 2;
+  const { data, error } = isSplit
+    ? await supabase.rpc("log_recurring_occurrence_split", {
+        p_recurring_id: r.id,
+        p_occurrence_index: occurrenceIndex,
+        p_date: date,
+        p_account_id: r.accountId,
+        p_note: r.name + " (định kỳ)",
+        p_lines: r.splitLines,
+      })
+    : await supabase.rpc("log_recurring_occurrence", {
     p_recurring_id: r.id,
     p_occurrence_index: occurrenceIndex,
     p_date: date,
@@ -2359,7 +2516,8 @@ async function toggleRecurringActive(r) {
     return false;
   }
 
-  setTxs((prev) => [txFromDb(data), ...prev]);
+  const rows = Array.isArray(data) ? data : [data];
+  setTxs((prev) => [...rows.map(txFromDb), ...prev]);
   setRecurring((prev) => prev.map((x) => x.id === r.id ? { ...x, doneCount: occurrenceIndex + 1 } : x));
   return true;
 }
@@ -2391,7 +2549,7 @@ async function toggleRecurringActive(r) {
   async function applyParetoBudgets() {
   const now = new Date();
   const lastMonthKey = monthKey(new Date(now.getFullYear(), now.getMonth() - 1, 1));
-  const recurringCats = new Set(recurring.map((r) => r.category)); // danh mục đang là chi phí cố định/định kỳ/trả góp
+  const recurringCats = new Set(recurring.flatMap((r) => (r.splitLines ? r.splitLines.map((l) => l.category) : [r.category]))); // danh mục đang là chi phí cố định/định kỳ/trả góp
 
   const lastMonthByCat = {};
   txs.forEach((t) => {
@@ -2561,7 +2719,7 @@ const reconcile = useMemo(() => {
       const seen = new Map();
       const result = [];
       list.forEach((t) => {
-        if (t.type === "income" && t.refundForTxId && !showRefundsAsItems) return; // hiển thị lồng vào giao dịch gốc bên dưới, không hiện riêng
+        if (t.type === "income" && t.refundForTxId && !t.splitGroupId && !showRefundsAsItems) return; // hiển thị lồng vào giao dịch gốc bên dưới, không hiện riêng
         if (!t.splitGroupId) { result.push(toItem(t)); return; }
         if (seen.has(t.splitGroupId)) {
           const g = seen.get(t.splitGroupId);
@@ -2831,6 +2989,7 @@ closingBalance, openingBalance, cycleItems: toItemsGrouped(cycleTxs),      cycle
   }, [filteredTxs]);
   const isNestedRefund = (t, sameGroup) => {
     if (!(t.type === "income" && t.refundForTxId)) return false;
+    if (t.splitGroupId) return false; // nằm trong khoản thu gộp → giữ trong nhóm để tổng nhóm đúng
     const orig = filteredTxById[t.refundForTxId];
     return !!orig && sameGroup(orig);
   };
@@ -2933,16 +3092,17 @@ const periodExpense = periodTxs.filter((t) => t.type === "expense").reduce((s, t
           seen.get(t.splitGroupId).items.push(t);
         } else {
           const acc = accById(t.accountId);
-          const g = { isGroup: true, id: t.splitGroupId, accountId: t.accountId, accName: acc?.name, accType: acc?.type, vendor: t.vendor, note: t.note, items: [t] };
+          const g = { isGroup: true, id: t.splitGroupId, type: t.type, accountId: t.accountId, accName: acc?.name, accType: acc?.type, vendor: t.vendor, note: t.note, items: [t] };
           seen.set(t.splitGroupId, g);
           merged.push(g);
         }
       });
+      merged.forEach((g) => { if (g.isGroup) g.refundLabels = refundLabelsFor(g.items); });
       day.txs = merged;
     });
 
     return groups;
-  }, [recentList, accounts]);
+  }, [recentList, accounts, txs]);
 
   const inputStyle = `
     .hide-scrollbar { scrollbar-width: none; -ms-overflow-style: none; }
@@ -3805,19 +3965,71 @@ const periodExpense = periodTxs.filter((t) => t.type === "expense").reduce((s, t
                 <div style={{ width: "100%" }}><AmountInput value={newRecurring.amount} onChange={(v) => setNewRecurring({ ...newRecurring, amount: v })} placeholder="Số tiền mỗi lần" /></div>
               )}
 
+              <label className="sans text-xs flex items-center gap-2" style={{ color: COLORS.textSecondary }}>
+                <input type="checkbox" checked={newRecurring.isSplit} onChange={(e) => toggleRecurringSplit(e.target.checked)} style={{ width: "auto" }} />
+                Khoản gộp — mỗi lần ghi nhận tách thành nhiều danh mục/thành viên
+              </label>
+
               <div className="flex gap-2">
-                <select value={newRecurring.category} onChange={(e) => setNewRecurring({ ...newRecurring, category: e.target.value })}>
-                  {expenseCats.map((c) => <option key={c} value={c}>{c}</option>)}
-                </select>
+                {!newRecurring.isSplit && (
+                  <select value={newRecurring.category} onChange={(e) => setNewRecurring({ ...newRecurring, category: e.target.value })}>
+                    {expenseCats.map((c) => <option key={c} value={c}>{c}</option>)}
+                  </select>
+                )}
                 <select value={newRecurring.accountId} onChange={(e) => setNewRecurring({ ...newRecurring, accountId: e.target.value })}>
                   {accounts.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
                 </select>
               </div>
-              <div><label className="lbl">Thành viên</label>
-                <select value={newRecurring.member} onChange={(e) => setNewRecurring({ ...newRecurring, member: e.target.value })}>
-                  {members.map((m) => <option key={m} value={m}>{m}</option>)}
-                </select>
-              </div>
+              {!newRecurring.isSplit && (
+                <div><label className="lbl">Thành viên</label>
+                  <select value={newRecurring.member} onChange={(e) => setNewRecurring({ ...newRecurring, member: e.target.value })}>
+                    {members.map((m) => <option key={m} value={m}>{m}</option>)}
+                  </select>
+                </div>
+              )}
+
+              {newRecurring.isSplit && (() => {
+                const lines = newRecurring.splitLines;
+                const remaining = (Number(newRecurring.amount) || 0) - lines.reduce((s, l) => s + (Number(l.amount) || 0), 0);
+                return (
+                  <div>
+                    <div className="flex items-center justify-between mb-2">
+                      <p className="sans text-xs" style={{ color: COLORS.textSecondary }}>Tách khoản mỗi kỳ</p>
+                      <span className="mono text-xs" style={{ color: remaining === 0 ? COLORS.accent : COLORS.expense }}>Còn lại: {fmtVND(remaining)}</span>
+                    </div>
+                    <div className="space-y-2">
+                      {lines.map((l, i) => (
+                        <div key={l.id} className="rounded-lg p-2.5" style={{ background: COLORS.surface2, border: "1px solid " + COLORS.border }}>
+                          <div className="flex items-center justify-between mb-2">
+                            <span className="sans text-xs" style={{ color: COLORS.textMuted }}>Khoản {i + 1}</span>
+                            {lines.length > 2 && (
+                              <button onClick={() => setNewRecurring((r) => ({ ...r, splitLines: r.splitLines.filter((x) => x.id !== l.id) }))} aria-label={`Xóa khoản ${i + 1}`} style={{ color: COLORS.expense }}><Trash2 size={13} /></button>
+                            )}
+                          </div>
+                          <div className="chip-row flex gap-2 mb-2" style={{ overflowX: "auto" }}>
+                            {expenseCats.map((c) => (
+                              <Chip key={c} label={c} active={l.category === c} onClick={() => updateRecurringLine(l.id, { category: c })} />
+                            ))}
+                          </div>
+                          <div className="mb-2">
+                            <AmountInput value={l.amount} onChange={(v) => updateRecurringLine(l.id, { amount: v })} placeholder="Số tiền" />
+                          </div>
+                          <select value={l.member} onChange={(e) => updateRecurringLine(l.id, { member: e.target.value })}>
+                            {members.map((m) => <option key={m} value={m}>{m}</option>)}
+                          </select>
+                        </div>
+                      ))}
+                    </div>
+                    <button
+                      onClick={() => setNewRecurring((r) => ({ ...r, splitLines: [...r.splitLines, { id: "r" + r.splitLines.length + Date.now(), category: expenseCats[0] || "", member: members[0] || "", amount: remaining > 0 ? String(remaining) : "" }] }))}
+                      className="sans text-xs mt-2 w-full py-2 rounded-md flex items-center justify-center gap-1.5"
+                      style={{ border: "1px dashed " + COLORS.border, color: COLORS.textSecondary }}
+                    >
+                      <Plus size={13} /> Thêm khoản
+                    </button>
+                  </div>
+                );
+              })()}
 
               <div>
                 <label className="lbl">
@@ -3856,7 +4068,7 @@ const periodExpense = periodTxs.filter((t) => t.type === "expense").reduce((s, t
                 <button
                   onClick={() => {
                     setEditingRecurringId(null);
-                    setNewRecurring({ name: "", amount: "", category: expenseCats[0] || "", member: members[0] || "", accountId: accounts[0]?.id || "", startDate: todayISO(), repeatValue: 1, repeatUnit: "month", cycleCount: "", principal: "", isInstallment: false });
+                    setNewRecurring({ name: "", amount: "", category: expenseCats[0] || "", member: members[0] || "", accountId: accounts[0]?.id || "", startDate: todayISO(), repeatValue: 1, repeatUnit: "month", cycleCount: "", principal: "", isInstallment: false, isSplit: false, splitLines: [] });
                   }}
                   className="w-full py-2 rounded-md sans text-xs"
                   style={{ border: "1px solid " + COLORS.border, color: COLORS.textMuted }}
@@ -3892,7 +4104,7 @@ const periodExpense = periodTxs.filter((t) => t.type === "expense").reduce((s, t
                   { v: "income", l: "Thu nhập", icon: TrendingUp },
                   { v: "transfer", l: "Chuyển khoản", icon: ArrowRightLeft },
                 ].map((o) => (
-                  <button key={o.v} onClick={() => setEntryType(o.v)} className="sans flex-1 py-2.5 rounded-md flex items-center justify-center gap-1.5"
+                  <button key={o.v} onClick={() => switchEntryType(o.v)} className="sans flex-1 py-2.5 rounded-md flex items-center justify-center gap-1.5"
                     style={{ fontSize: 13, border: "1px solid " + (entryType === o.v ? COLORS.cream : COLORS.border), color: entryType === o.v ? COLORS.cream : COLORS.textSecondary, background: entryType === o.v ? "#3A3624" : "transparent" }}>
                     <o.icon size={14} /> {o.l}
                   </button>
@@ -3905,16 +4117,24 @@ const periodExpense = periodTxs.filter((t) => t.type === "expense").reduce((s, t
                   <input type="date" value={form.date} onChange={(e) => setForm({ ...form, date: e.target.value })} />
                 </div>
               </div>
-                            <div><label className="lbl">{isSplitEntry ? "Tổng số tiền hóa đơn" : "Số tiền"}</label><AmountInput value={form.amount} onChange={(v) => setForm({ ...form, amount: v })} /></div>
+                            <div><label className="lbl">{isSplitEntry && entryType !== "transfer" ? (entryType === "income" ? "Tổng số tiền nhận" : "Tổng số tiền hóa đơn") : "Số tiền"}</label><AmountInput value={form.amount} onChange={(v) => setForm({ ...form, amount: v })} /></div>
 
-              {entryType === "expense" && !editingId && (
+              {entryType !== "transfer" && !editingId && !editingGroupId && (
                 <label className="sans text-xs flex items-center gap-2" style={{ color: COLORS.textSecondary }}>
-                  <input type="checkbox" checked={isSplitEntry} onChange={(e) => setIsSplitEntry(e.target.checked)} style={{ width: "auto" }} />
-                  Hóa đơn gộp — tách thành nhiều danh mục/thành viên
+                  <input
+                    type="checkbox"
+                    checked={isSplitEntry}
+                    onChange={(e) => {
+                      setIsSplitEntry(e.target.checked);
+                      if (e.target.checked) { setIsRefundEntry(false); setRefundForTxId(null); setRefundSearchQuery(""); }
+                    }}
+                    style={{ width: "auto" }}
+                  />
+                  {entryType === "income" ? "Khoản thu gộp — tách thành nhiều danh mục/thành viên" : "Hóa đơn gộp — tách thành nhiều danh mục/thành viên"}
                 </label>
               )}
 
-              {entryType === "expense" && isSplitEntry && (!editingId || editingGroupId) ? (
+              {entryType !== "transfer" && isSplitEntry && (!editingId || editingGroupId) ? (
                 <>
                   <div className="flex gap-2">
                     <div className="flex-1"><label className="lbl">Tài khoản</label>
@@ -3922,11 +4142,18 @@ const periodExpense = periodTxs.filter((t) => t.type === "expense").reduce((s, t
                         {accounts.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
                       </select>
                     </div>
-                    <div className="flex-1"><label className="lbl">NCC (chung cả hóa đơn)</label>
-                      <input value={form.vendor} onChange={(e) => setForm({ ...form, vendor: e.target.value })} placeholder="VD: Coopmart" />
-                    </div>
+                    {entryType === "income" ? (
+                      <div className="flex-1"><label className="lbl">Diễn giải chung</label>
+                        <input value={form.note} onChange={(e) => setForm({ ...form, note: e.target.value })} placeholder="VD: Lương + thưởng T11" />
+                      </div>
+                    ) : (
+                      <div className="flex-1"><label className="lbl">NCC (chung cả hóa đơn)</label>
+                        <input value={form.vendor} onChange={(e) => setForm({ ...form, vendor: e.target.value })} placeholder="VD: Coopmart" />
+                      </div>
+                    )}
                   </div>
 
+                  {entryType === "expense" && (
                   <div>
                     <div className="flex items-center justify-between mb-1.5">
                       <label className="lbl" style={{ marginBottom: 0 }}>Chọn NCC có sẵn</label>
@@ -3938,6 +4165,7 @@ const periodExpense = periodTxs.filter((t) => t.type === "expense").reduce((s, t
                       ))}
                     </div>
                   </div>
+                  )}
 
                   {(() => {
                     const splitSum = splitLines.reduce((s, l) => s + (Number(l.amount) || 0), 0);
@@ -3953,13 +4181,75 @@ const periodExpense = periodTxs.filter((t) => t.type === "expense").reduce((s, t
                             <div key={l.id} className="rounded-lg p-2.5" style={{ background: COLORS.surface2, border: "1px solid " + COLORS.border }}>
                               <div className="flex items-center justify-between mb-2">
                                 <span className="sans text-xs" style={{ color: COLORS.textMuted }}>Khoản {i + 1}</span>
-                                <button onClick={() => setSplitLines((ls) => ls.length > 1 ? ls.filter((x) => x.id !== l.id) : ls)} style={{ color: COLORS.expense }}><Trash2 size={13} /></button>
+                                {l.locked ? (
+                                  <span className="sans" style={{ fontSize: 10, color: COLORS.textMuted }}>Khoản gốc của kỳ định kỳ</span>
+                                ) : (
+                                  <button onClick={() => setSplitLines((ls) => ls.length > 1 ? ls.filter((x) => x.id !== l.id) : ls)} style={{ color: COLORS.expense }}><Trash2 size={13} /></button>
+                                )}
                               </div>
-                              <div className="chip-row flex gap-2 mb-2" style={{ overflowX: "auto" }}>
-                                {expenseCats.map((c) => (
-                                  <Chip key={c} label={c} active={l.category === c} onClick={() => setSplitLines((ls) => ls.map((x) => x.id === l.id ? { ...x, category: c } : x))} />
-                                ))}
-                              </div>
+                              {entryType === "income" && (
+                                <label className="sans text-xs flex items-center gap-2 mb-2" style={{ color: COLORS.textSecondary }}>
+                                  <input
+                                    type="checkbox"
+                                    checked={!!l.refund}
+                                    onChange={(e) => {
+                                      const on = e.target.checked;
+                                      setSplitLines((ls) => ls.map((x) => x.id === l.id
+                                        ? { ...x, refund: on, refundForTxId: null, refundQuery: "", category: on ? "Hoàn tiền" : (incomeCats[0] || "") }
+                                        : x));
+                                    }}
+                                    style={{ width: "auto" }}
+                                  />
+                                  Hoàn tiền cho 1 giao dịch chi
+                                </label>
+                              )}
+                              {entryType === "income" && l.refund ? (() => {
+                                const orig = l.refundForTxId ? txs.find((t) => t.id === l.refundForTxId) : null;
+                                if (orig) {
+                                  return (
+                                    <div className="flex items-center justify-between rounded-md px-3 py-2 mb-2" style={{ border: "1px solid " + COLORS.border, background: COLORS.surface }}>
+                                      <span className="sans text-xs" style={{ color: COLORS.textSecondary }}>
+                                        Hoàn cho: {fmtDate(orig.date)} · {orig.category}{orig.note ? " · " + orig.note : ""} · {fmtVND(orig.amount)}
+                                        <span style={{ color: COLORS.textMuted }}> (còn hoàn được {fmtVND(refundableLeft(orig))})</span>
+                                      </span>
+                                      <button onClick={() => setSplitLines((ls) => ls.map((x) => x.id === l.id ? { ...x, refundForTxId: null, refundQuery: "" } : x))} className="sans text-xs" style={{ color: COLORS.textMuted, flexShrink: 0, marginLeft: 8 }}>Đổi</button>
+                                    </div>
+                                  );
+                                }
+                                const candidates = findRefundCandidates(l.refundQuery);
+                                return (
+                                  <div className="mb-2">
+                                    <input value={l.refundQuery || ""} onChange={(e) => setSplitLines((ls) => ls.map((x) => x.id === l.id ? { ...x, refundQuery: e.target.value } : x))} placeholder="Tìm giao dịch chi: ghi chú, danh mục, NCC, số tiền..." />
+                                    {candidates.length > 0 && (
+                                      <div className="mt-1.5 space-y-1">
+                                        {candidates.map((t) => {
+                                          const left = refundableLeft(t);
+                                          return (
+                                            <button
+                                              key={t.id}
+                                              disabled={left <= 0}
+                                              className="w-full flex justify-between sans text-xs rounded-md px-2 py-1.5"
+                                              style={{ border: "1px solid " + COLORS.border, color: left <= 0 ? COLORS.textMuted : COLORS.textSecondary, textAlign: "left" }}
+                                              onClick={() => setSplitLines((ls) => ls.map((x) => x.id === l.id
+                                                ? { ...x, refundForTxId: t.id, refundQuery: "", member: t.member || x.member, amount: x.amount || String(left) }
+                                                : x))}
+                                            >
+                                              <span>{fmtDate(t.date)} · {t.category}{t.note ? " · " + t.note : ""}</span>
+                                              <span className="mono">{left <= 0 ? "đã hoàn đủ" : "còn " + fmtVND(left)}</span>
+                                            </button>
+                                          );
+                                        })}
+                                      </div>
+                                    )}
+                                  </div>
+                                );
+                              })() : (
+                                <div className="chip-row flex gap-2 mb-2" style={{ overflowX: "auto" }}>
+                                  {(entryType === "income" ? incomeCats : expenseCats).map((c) => (
+                                    <Chip key={c} label={c} active={l.category === c} onClick={() => setSplitLines((ls) => ls.map((x) => x.id === l.id ? { ...x, category: c } : x))} />
+                                  ))}
+                                </div>
+                              )}
                               <div className="mb-2">
                                 <AmountInput value={l.amount} onChange={(v) => setSplitLines((ls) => ls.map((x) => x.id === l.id ? { ...x, amount: v } : x))} placeholder="Số tiền" />
                               </div>
@@ -3973,7 +4263,7 @@ const periodExpense = periodTxs.filter((t) => t.type === "expense").reduce((s, t
                           ))}
                         </div>
                         <button
-                          onClick={() => setSplitLines((ls) => [...ls, { id: "l" + ls.length + Date.now(), category: expenseCats[0] || "", member: members[0] || "", amount: remaining > 0 ? String(remaining) : "", note: "" }])}
+                          onClick={() => setSplitLines((ls) => [...ls, { id: "l" + ls.length + Date.now(), category: (entryType === "income" ? incomeCats : expenseCats)[0] || "", member: members[0] || "", amount: remaining > 0 ? String(remaining) : "", note: "" }])}
                           className="sans text-xs mt-2 w-full py-2 rounded-md flex items-center justify-center gap-1.5"
                           style={{ border: "1px dashed " + COLORS.border, color: COLORS.textSecondary }}
                         >
@@ -4176,7 +4466,7 @@ const periodExpense = periodTxs.filter((t) => t.type === "expense").reduce((s, t
                       const items = txs.filter((x) => x.splitGroupId === detailTx.splitGroupId);
                       const acc = accById(detailTx.accountId);
                       startEditSplitGroup({
-                        id: detailTx.splitGroupId, accountId: detailTx.accountId,
+                        id: detailTx.splitGroupId, type: detailTx.type, accountId: detailTx.accountId,
                         accName: acc?.name, accType: acc?.type,
                         vendor: detailTx.vendor, note: detailTx.note, items,
                       });
